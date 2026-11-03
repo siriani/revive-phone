@@ -6,6 +6,7 @@
 
 mod app;
 mod dados;
+mod manifesto;
 mod musica;
 mod tela;
 

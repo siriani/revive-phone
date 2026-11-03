@@ -1,0 +1,18 @@
+{
+  "id": "home-assistant",
+  "nome": "Sala",
+  "icone": "⌂",
+  "cor": "#1d4e6b",
+  "tipo": "valores",
+  "fonte": {
+    "url": "http://homeassistant.local:8123/api/states/sensor.temperatura_sala",
+    "headers": {
+      "Authorization": "Bearer SEU_TOKEN"
+    }
+  },
+  "valores": [
+    {"rotulo": "Temperatura", "caminho": "state"},
+    {"rotulo": "Unidade", "caminho": "attributes.unit_of_measurement"},
+    {"rotulo": "Última mudança", "caminho": "last_changed"}
+  ]
+}

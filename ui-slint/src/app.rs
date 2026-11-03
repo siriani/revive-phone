@@ -11,6 +11,7 @@ use serde_json::Value;
 use slint::{Color, ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use crate::dados;
+use crate::manifesto;
 use crate::musica::{self, Subsonic};
 use crate::{AppInfo, AppWindow, Aparelho, Item, Rede, Tecla};
 
@@ -33,6 +34,8 @@ enum Acao {
     Album(Value),
     Artista(Value),
     Playlist(Value),
+    /// item só informativo (apps por manifesto)
+    Nada,
 }
 
 #[derive(Clone)]
@@ -263,6 +266,7 @@ fn executar(ui: &AppWindow, acao: Acao) {
             let id = a["id"].as_str().unwrap_or("").to_string();
             abrir_lista(ui, a["name"].as_str().unwrap_or(""), move |s| Ok(itens_albuns(s.albuns_do_artista(&id)?)));
         }
+        Acao::Nada => {}
         Acao::Playlist(p) => {
             let id = p["id"].as_str().unwrap_or("").to_string();
             abrir_lista(ui, p["name"].as_str().unwrap_or(""), move |s| Ok(itens_faixas(s.playlist(&id)?, true)));
@@ -450,6 +454,9 @@ fn tecla_fisica(ui: &AppWindow, t: &str) {
 
 fn ir(ui: &AppWindow, tela: &str) {
     ui.set_aviso(ss(""));
+    if let Some(id) = tela.strip_prefix("m:") {
+        return abrir_manifesto(ui, id);
+    }
     ui.set_tela(ss(tela));
     match tela {
         "wifi" => procurar_redes(ui),
@@ -460,6 +467,22 @@ fn ir(ui: &AppWindow, tela: &str) {
         }
         _ => {}
     }
+}
+
+/// App por manifesto: busca a URL dele e mostra na lista; "Voltar" volta ao lançador.
+fn abrir_manifesto(ui: &AppWindow, id: &str) {
+    let Some(m) = manifesto::achar(id) else { return };
+    EST.with_borrow_mut(|e| {
+        e.pilha.clear();
+        e.origem = "inicio".into();
+    });
+    ui.set_tela(ss("inicio")); // a lista nova não deve empilhar a tela anterior
+    abrir_lista(ui, &m.nome, move |_| {
+        Ok(m.buscar()?
+            .into_iter()
+            .map(|(titulo, sub, verde)| ItemDados { titulo, sub, verde, acao: Acao::Nada })
+            .collect())
+    });
 }
 
 fn procurar_redes(ui: &AppWindow) {
@@ -703,6 +726,12 @@ pub fn ligar(ui: &AppWindow) {
             icone: ss(*icone),
             cor: Color::from_rgb_u8(*r, *g, *b),
         })
+        .chain(manifesto::todos().iter().map(|m| AppInfo {
+            id: ss(format!("m:{}", m.id)),
+            nome: ss(m.nome.clone()),
+            icone: ss(m.icone.clone()),
+            cor: Color::from_rgb_u8(m.cor.0, m.cor.1, m.cor.2),
+        }))
         .collect();
     ui.set_apps(ModelRc::new(VecModel::from(apps)));
 

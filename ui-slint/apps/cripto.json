@@ -1,0 +1,13 @@
+{
+  "id": "cripto",
+  "nome": "Cripto",
+  "icone": "★",
+  "cor": "#7a4b12",
+  "tipo": "lista",
+  "fonte": {
+    "url": "https://api.coingecko.com/api/v3/coins/markets?vs_currency=brl&per_page=8"
+  },
+  "itens": "",
+  "titulo": "name",
+  "sub": "current_price"
+}

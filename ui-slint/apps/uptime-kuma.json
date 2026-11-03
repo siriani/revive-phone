@@ -1,0 +1,13 @@
+{
+  "id": "uptime-kuma",
+  "nome": "Serviços",
+  "icone": "✱",
+  "cor": "#2e5e3e",
+  "tipo": "lista",
+  "fonte": {
+    "url": "http://uptime.local:3001/api/status-page/casa"
+  },
+  "itens": "publicGroupList.0.monitorList",
+  "titulo": "name",
+  "sub": "type"
+}
