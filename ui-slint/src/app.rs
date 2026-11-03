@@ -13,7 +13,8 @@ use slint::{Color, ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffe
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{AppInfo, AppWindow, Aparelho, Item, Rede, Tecla};
+use crate::{AppInfo, AppWindow, Aparelho, Item, Moeda, Rede, Tecla, Vela};
+use crate::cripto;
 
 const POR_PAGINA: usize = 8;
 
@@ -22,6 +23,7 @@ const POR_PAGINA: usize = 8;
 /// O ícone é um caractere da fonte embutida (listado em `caracteres-embutidos`).
 const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("painel", "Painel", "◷", (70, 55, 30)),
+    ("cripto", "Cripto", "★", (58, 45, 90)),
     ("musica", "Música", "♫", (40, 60, 90)),
     ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
@@ -77,6 +79,8 @@ struct Estado {
 }
 
 thread_local! {
+    /// ícones das moedas já baixados (url -> imagem)
+    static ICONES: RefCell<std::collections::HashMap<String, Image>> = RefCell::default();
     static EST: RefCell<Estado> = RefCell::new(Estado {
         lista: Lista::default(),
         pilha: vec![],
@@ -457,6 +461,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     if let Some(id) = tela.strip_prefix("m:") {
         return abrir_manifesto(ui, id);
     }
+    if tela == "cripto" {
+        carregar_cripto(ui);
+    }
     ui.set_tela(ss(tela));
     match tela {
         "wifi" => procurar_redes(ui),
@@ -467,6 +474,105 @@ fn ir(ui: &AppWindow, tela: &str) {
         }
         _ => {}
     }
+}
+
+// ------------------------------------------------------------------- cripto
+
+/// Preço no formato brasileiro (milhar com ponto, centavos com vírgula), em R$ ou US$.
+fn preco(v: f64, moeda: &str) -> String {
+    let simbolo = if moeda == "usd" { "US$" } else { "R$" };
+    if v >= 100.0 {
+        format!("{simbolo} {}", dados::milhar(v))
+    } else {
+        format!("{simbolo} {v:.2}").replace('.', ",")
+    }
+}
+
+fn carregar_cripto(ui: &AppWindow) {
+    let moeda = cripto::moeda();
+    ui.set_cripto_moeda(ss(moeda.clone()));
+    ui.set_cripto_mensagem(ss("carregando..."));
+    let ja_tem: Vec<String> = ICONES.with_borrow(|i| i.keys().cloned().collect());
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let r = cripto::mercado(&moeda).map(|moedas| {
+            let icones: Vec<_> = moedas
+                .iter()
+                .map(|m| if ja_tem.contains(&m.icone_url) { None } else { cripto::icone(&m.icone_url) })
+                .collect();
+            (moedas, icones)
+        });
+        let _ = fraca.upgrade_in_event_loop(move |ui| match r {
+            Ok((moedas, icones)) => {
+                let v: Vec<Moeda> = moedas
+                    .iter()
+                    .zip(icones)
+                    .map(|(m, buf)| {
+                        let icone = ICONES.with_borrow_mut(|c| {
+                            if let Some(b) = buf {
+                                c.insert(m.icone_url.clone(), Image::from_rgba8(b));
+                            }
+                            c.get(&m.icone_url).cloned().unwrap_or_default()
+                        });
+                        Moeda {
+                            id: ss(m.id.clone()),
+                            simbolo: ss(m.simbolo.clone()),
+                            nome: ss(m.nome.clone()),
+                            preco: ss(preco(m.preco, &moeda)),
+                            variacao: ss(format!("{:+.2}%", m.variacao).replace('.', ",")),
+                            subiu: m.variacao >= 0.0,
+                            icone,
+                        }
+                    })
+                    .collect();
+                ui.set_moedas(ModelRc::new(VecModel::from(v)));
+            }
+            Err(e) => {
+                ui.set_moedas(ModelRc::new(VecModel::from(Vec::<Moeda>::new())));
+                ui.set_cripto_mensagem(ss(format!("não carregou: {}", curto(&e, 40))));
+            }
+        });
+    });
+}
+
+fn abrir_grafico(ui: &AppWindow, id: String, nome: String) {
+    ui.set_grafico_titulo(ss(format!("{nome} · últimas 24 h")));
+    ui.set_grafico_info(ss("carregando..."));
+    ui.set_velas(ModelRc::new(VecModel::from(Vec::<Vela>::new())));
+    ui.set_tela(ss("grafico"));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let moeda = cripto::moeda();
+        let r = cripto::grafico(&id, &moeda);
+        let _ = fraca.upgrade_in_event_loop(move |ui| match r {
+            Ok(g) => {
+                let velas: Vec<Vela> = g
+                    .velas
+                    .iter()
+                    .map(|v| Vela {
+                        x: v.x,
+                        topo: v.topo,
+                        base: v.base,
+                        corpo_topo: v.corpo_topo,
+                        corpo_base: v.corpo_base,
+                        subiu: v.subiu,
+                    })
+                    .collect();
+                let var = (g.fechamento / g.abertura - 1.0) * 100.0;
+                ui.set_grafico_maximo(ss(format!("máx {}", preco(g.maximo, &moeda))));
+                ui.set_grafico_minimo(ss(format!("mín {}", preco(g.minimo, &moeda))));
+                let pct = format!("{var:+.2}%").replace('.', ",");
+                ui.set_grafico_info(ss(format!(
+                    "{} → {}  ({pct})",
+                    preco(g.abertura, &moeda),
+                    preco(g.fechamento, &moeda)
+                )));
+                ui.set_grafico_subiu(var >= 0.0);
+                ui.set_velas(ModelRc::new(VecModel::from(velas)));
+            }
+            Err(e) => ui.set_grafico_info(ss(format!("não carregou: {}", curto(&e, 40)))),
+        });
+    });
 }
 
 /// App por manifesto: busca a URL dele e mostra na lista; "Voltar" volta ao lançador.
@@ -734,6 +840,21 @@ pub fn ligar(ui: &AppWindow) {
         }))
         .collect();
     ui.set_apps(ModelRc::new(VecModel::from(apps)));
+    let f = ui.as_weak();
+    ui.on_cripto_abrir(move |id, nome| {
+        if let Some(ui) = f.upgrade() {
+            abrir_grafico(&ui, id.to_string(), nome.to_string());
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_cripto_atualizar(move || f.upgrade().iter().for_each(carregar_cripto));
+    let f = ui.as_weak();
+    ui.on_cripto_trocar_moeda(move || {
+        if let Some(ui) = f.upgrade() {
+            cripto::trocar_moeda();
+            carregar_cripto(&ui);
+        }
+    });
 
     // relógio
     let fraca = ui.as_weak();
@@ -775,7 +896,8 @@ pub fn ligar(ui: &AppWindow) {
     let a = atualizar_btc.clone();
     ui.on_atualizar_btc(move || a());
     let t = slint::Timer::default();
-    t.start(slint::TimerMode::Repeated, Duration::from_secs(60), atualizar_btc);
+    // a API gratuita da CoinGecko limita as chamadas por minuto (o app Cripto também usa)
+    t.start(slint::TimerMode::Repeated, Duration::from_secs(300), atualizar_btc);
     std::mem::forget(t);
 
     // telas

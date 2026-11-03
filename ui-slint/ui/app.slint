@@ -416,6 +416,91 @@ component TelaTocando inherits Rectangle {
             clicado => { root.ir("musica"); } }
 }
 
+// ------------------------------------------------------------------- cripto
+
+export struct Moeda { id: string, simbolo: string, nome: string, preco: string, variacao: string,
+                      subiu: bool, icone: image }
+// vela em coordenadas 0..1 do gráfico (y cresce para baixo)
+export struct Vela { x: float, topo: float, base: float, corpo-topo: float, corpo-base: float, subiu: bool }
+
+component TelaCripto inherits Rectangle {
+    in property <[Moeda]> moedas;
+    in property <string> mensagem;
+    in property <string> moeda;  // "brl" ou "usd"
+    callback abrir(string, string);
+    callback atualizar();
+    callback voltar();
+    callback trocar-moeda();
+    Titulo { text: "Cripto · 24 h"; }
+    Botao { x: 1030px; y: 12px; width: 220px; height: 64px; fonte: 26px;
+            texto: root.moeda == "usd" ? "US$ → R$" : "R$ → US$";
+            clicado => { root.trocar-moeda(); } }
+    if root.moedas.length == 0: Text { y: 300px; width: 1280px; text: root.mensagem; font-size: 34px;
+                                       color: Cores.apagado; horizontal-alignment: center; }
+    for m[i] in root.moedas: Rectangle {
+        x: 30px + mod(i, 4) * 310px;
+        y: 95px + floor(i / 4) * 255px;
+        width: 290px;
+        height: 240px;
+        border-radius: 24px;
+        // mosaico: verde se subiu nas últimas 24 h, vermelho se caiu
+        background: toque.pressed ? (m.subiu ? #2f8a55 : #9a3540) : (m.subiu ? #1e5c38 : #6e2229);
+        Image { x: 20px; y: 20px; width: 64px; height: 64px; source: m.icone; }
+        Text { x: 100px; y: 18px; text: m.simbolo; font-size: 34px; font-family: "DejaVu Sans Bold";
+               color: Cores.texto; }
+        Text { x: 100px; y: 58px; width: 180px; text: m.nome; font-size: 26px; color: Cores.texto;
+               overflow: elide; }
+        Text { x: 20px; y: 110px; width: 260px; text: m.preco; font-size: 34px;
+               font-family: "DejaVu Sans Bold"; color: Cores.texto; overflow: elide; }
+        Text { x: 20px; y: 170px; text: m.variacao; font-size: 34px; color: Cores.texto; }
+        toque := TouchArea { clicked => { root.abrir(m.id, m.nome); } }
+    }
+    Rodape { width: parent.width; direita: "Atualizar"; clicou-esquerda => { root.voltar(); }
+             clicou-direita => { root.atualizar(); } }
+}
+
+component TelaGrafico inherits Rectangle {
+    in property <string> titulo;
+    in property <string> info;
+    in property <string> maximo;
+    in property <string> minimo;
+    in property <[Vela]> velas;
+    in property <bool> subiu;
+    callback voltar();
+    property <length> gx: 40px;
+    property <length> gy: 90px;
+    property <length> gw: 1200px;
+    property <length> gh: 470px;
+    Titulo { text: root.titulo; }
+    Rectangle { x: root.gx; y: root.gy; width: root.gw; height: root.gh; border-radius: 12px;
+                background: Cores.cartao; }
+    if root.velas.length == 0: Text { y: 300px; width: 1280px; text: root.info; font-size: 34px;
+                                      color: Cores.apagado; horizontal-alignment: center; }
+    // pavio: máxima e mínima de cada meia hora
+    for v in root.velas: Rectangle {
+        x: root.gx + v.x * root.gw - 1px;
+        y: root.gy + v.topo * root.gh;
+        width: 2px;
+        height: max(1px, (v.base - v.topo) * root.gh);
+        background: v.subiu ? Cores.bom : Cores.ruim;
+    }
+    // corpo: abertura e fechamento
+    for v in root.velas: Rectangle {
+        x: root.gx + v.x * root.gw - 9px;
+        y: root.gy + v.corpo-topo * root.gh;
+        width: 18px;
+        height: max(2px, (v.corpo-base - v.corpo-topo) * root.gh);
+        background: v.subiu ? Cores.bom : Cores.ruim;
+    }
+    if root.velas.length > 0: Text { x: root.gx + 12px; y: root.gy + 8px; text: root.maximo; font-size: 26px;
+                                     color: Cores.apagado; }
+    if root.velas.length > 0: Text { x: root.gx + 12px; y: root.gy + root.gh - 38px; text: root.minimo;
+                                     font-size: 26px; color: Cores.apagado; }
+    if root.velas.length > 0: Text { x: 0; y: 572px; width: 1280px; text: root.info; font-size: 34px;
+                                     color: root.subiu ? Cores.bom : Cores.ruim; horizontal-alignment: center; }
+    Rodape { width: parent.width; clicou-esquerda => { root.voltar(); } }
+}
+
 component Prompt inherits Rectangle {
     in property <string> codigo;
     in property <string> texto;
@@ -450,6 +535,18 @@ export component AppWindow inherits Window {
 
     in-out property <string> tela: "inicio";
     in property <[AppInfo]> apps;
+    in property <[Moeda]> moedas;
+    in property <string> cripto-mensagem;
+    in property <string> cripto-moeda;
+    callback cripto-trocar-moeda();
+    in property <string> grafico-titulo;
+    in property <string> grafico-info;
+    in property <string> grafico-maximo;
+    in property <string> grafico-minimo;
+    in property <[Vela]> velas;
+    in property <bool> grafico-subiu;
+    callback cripto-abrir(string, string);
+    callback cripto-atualizar();
     in property <string> aviso;
     in property <bool> mouse-visivel;
     in property <length> mouse-x;
@@ -533,6 +630,20 @@ export component AppWindow inherits Window {
             hora: root.hora; data: root.data; wifi-ssid: root.wifi-ssid; wifi-ok: root.wifi-ok;
             bt-conectados: root.bt-conectados; tocando: root.tocando; apps: root.apps;
             abrir(id) => { root.ir(id); }
+        }
+        if root.tela == "cripto": TelaCripto {
+            width: 1280px; height: 720px; moedas: root.moedas; mensagem: root.cripto-mensagem;
+            moeda: root.cripto-moeda;
+            trocar-moeda => { root.cripto-trocar-moeda(); }
+            abrir(id, nome) => { root.cripto-abrir(id, nome); }
+            atualizar => { root.cripto-atualizar(); }
+            voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "grafico": TelaGrafico {
+            width: 1280px; height: 720px; titulo: root.grafico-titulo; info: root.grafico-info;
+            maximo: root.grafico-maximo; minimo: root.grafico-minimo; velas: root.velas;
+            subiu: root.grafico-subiu;
+            voltar => { root.ir("cripto"); }
         }
         if root.tela == "painel": Painel {
             width: 1280px; height: 720px;
