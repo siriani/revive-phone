@@ -18,7 +18,15 @@ if apk add -q -t .revive-build gcc musl-dev; then
 		|| echo "AVISO: não compilou ui/blit; seguindo sem o blit em C"
 	apk del -q .revive-build
 fi
-install -m755 ui/revive-ui.initd /etc/init.d/revive-ui
+install -m755 ui-slint/revive-ui.initd /etc/init.d/revive-ui
+# interface em Slint (binário estático; ver ui-slint/README.md). Sem ela, roda a de Python.
+if [ -x ui-slint/revive-ui ]; then
+	install -m755 ui-slint/revive-ui /opt/revive/revive-ui
+elif wget -q -O /tmp/revive-ui "https://github.com/siriani/revive-phone/releases/latest/download/revive-ui-$(uname -m)"; then
+	install -m755 /tmp/revive-ui /opt/revive/revive-ui
+else
+	echo "AVISO: sem o binário da interface em Slint para $(uname -m); usando a interface em Python"
+fi
 install -m755 services/bluetooth/revive-bt.py /usr/local/sbin/revive-bt
 install -m755 services/bluetooth/revive-bt.initd /etc/init.d/revive-bt
 install -m755 services/music/revive-mpv.initd /etc/init.d/revive-mpv

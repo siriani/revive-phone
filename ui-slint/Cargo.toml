@@ -1,0 +1,27 @@
+[package]
+name = "revive-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.45"
+evdev = "0.13.2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+libc = "0.2.191"
+md-5 = "0.10"
+memmap2 = "0.9.12"
+serde_json = "1.0.154"
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+i-slint-common = { version = "=1.18.1", features = ["fontconfig-dlopen"] }
+ureq = { version = "3.5.1", default-features = false, features = ["rustls", "json"] }
+
+[build-dependencies]
+slint-build = "1.18.1"
+# fontconfig só carregado em tempo de execução (as fontes vão embutidas no binário)
+i-slint-common = { version = "=1.18.1", features = ["fontconfig-dlopen"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "abort"
+strip = true

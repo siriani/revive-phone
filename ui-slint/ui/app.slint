@@ -1,0 +1,562 @@
+import "fontes/DejaVuSans.ttf";
+import "fontes/DejaVuSansBold-Familia.ttf";
+
+// Revive: telas da interface (Slint). Paisagem 1280x720, desenhada pelo
+// renderizador por software direto no framebuffer, só nas áreas que mudam.
+
+export global Cores {
+    out property <color> fundo: #0e1116;
+    out property <color> cartao: #1c212a;
+    out property <color> texto: #ebeef2;
+    out property <color> apagado: #8c96a5;
+    out property <color> destaque: #f7931a;  // laranja do bitcoin
+    out property <color> bom: #50c878;
+    out property <color> ruim: #eb5a5a;
+    out property <color> tecla: #2d3440;
+    out property <color> musica: #283c5a;
+    out property <color> btc-botao: #46371e;
+}
+
+export component Botao inherits Rectangle {
+    in property <string> texto;
+    in property <color> cor: Cores.tecla;
+    in property <length> fonte: 34px;
+    callback clicado;
+    border-radius: 18px;
+    // acende enquanto o dedo está em cima: resposta imediata, antes de soltar
+    background: toque.pressed ? cor.brighter(40%) : cor;
+    Text {
+        text: root.texto;
+        color: Cores.texto;
+        font-size: root.fonte;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    toque := TouchArea {
+        clicked => { root.clicado(); }
+    }
+}
+
+component Cartao inherits Rectangle {
+    background: Cores.cartao;
+    border-radius: 28px;
+}
+
+component Inicio inherits Rectangle {
+    in property <string> hora;
+    in property <string> data;
+    in property <string> btc-brl;
+    in property <string> btc-usd;
+    in property <string> btc-variacao;
+    in property <bool> btc-subiu;
+    in property <string> btc-info;
+    in property <string> wifi-ssid;
+    in property <string> wifi-ip;
+    in property <bool> wifi-ok;
+    in property <string> tocando;
+    in property <string> bt-conectados;
+    callback ir(string);
+    callback atualizar-btc();
+
+    // coluna esquerda: relógio e bitcoin
+    Text { x: 0; y: 20px; width: 650px; height: 110px; text: root.hora; font-size: 110px; font-family: "DejaVu Sans Bold";
+           color: Cores.texto; horizontal-alignment: center; vertical-alignment: center; }
+    Text { x: 0; y: 128px; width: 650px; height: 44px; text: root.data; font-size: 34px;
+           color: Cores.apagado; horizontal-alignment: center; }
+    Cartao {
+        x: 30px; y: 195px; width: 590px; height: 495px;
+        Text { x: 30px; y: 20px; text: "Bitcoin"; font-size: 44px; font-family: "DejaVu Sans Bold"; color: Cores.destaque; }
+        Text { x: 0; y: 110px; width: parent.width; text: root.btc-brl; font-size: 84px; font-family: "DejaVu Sans Bold";
+               color: Cores.texto; horizontal-alignment: center; }
+        Text { x: 0; y: 220px; width: parent.width; text: root.btc-usd; font-size: 44px; font-family: "DejaVu Sans Bold";
+               color: Cores.apagado; horizontal-alignment: center; }
+        Text { x: 0; y: 300px; width: parent.width; text: root.btc-variacao; font-size: 34px;
+               color: root.btc-subiu ? Cores.bom : Cores.ruim; horizontal-alignment: center; }
+        Text { x: 0; y: 390px; width: parent.width; text: root.btc-info; font-size: 26px;
+               color: Cores.apagado; horizontal-alignment: center; }
+    }
+
+    // coluna direita: Wi-Fi, botões, música
+    Cartao {
+        x: 650px; y: 30px; width: 600px; height: 180px;
+        Text { x: 30px; y: 20px; text: "Wi-Fi"; font-size: 44px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
+        Rectangle { x: parent.width - 60px; y: 25px; width: 30px; height: 30px; border-radius: 15px;
+                    background: root.wifi-ok ? Cores.bom : Cores.ruim; }
+        Text { x: 30px; y: 85px; text: root.wifi-ssid; font-size: 34px;
+               color: root.wifi-ok ? Cores.texto : Cores.apagado; }
+        Text { x: 30px; y: 135px; text: root.wifi-ip; font-size: 26px; color: Cores.apagado; }
+    }
+    Botao { x: 650px; y: 230px; width: 190px; height: 100px; texto: "Wi-Fi"; clicado => { root.ir("wifi"); } }
+    Botao { x: 855px; y: 230px; width: 190px; height: 100px; texto: "Bluetooth"; fonte: 26px;
+            clicado => { root.ir("bt"); } }
+    Botao { x: 1060px; y: 230px; width: 190px; height: 100px; texto: "Atualizar"; fonte: 26px;
+            cor: Cores.btc-botao; clicado => { root.atualizar-btc(); } }
+    Botao { x: 650px; y: 350px; width: 600px; height: 120px; cor: Cores.musica;
+            texto: root.tocando == "" ? "♪ Música" : root.tocando;
+            fonte: root.tocando == "" ? 34px : 26px;
+            clicado => { root.ir(root.tocando == "" ? "musica" : "tocando"); } }
+    Text { x: 650px; y: 495px; width: 600px; text: root.bt-conectados; font-size: 26px;
+           color: Cores.apagado; horizontal-alignment: center; }
+}
+
+// ------------------------------------------------------------------ dados
+
+export struct Rede { ssid: string, barras: int, segura: bool, conectada: bool }
+export struct Aparelho { mac: string, nome: string, sub: string, conectado: bool, pareado: bool,
+                         som: bool, ocupado: bool }
+export struct Item { titulo: string, sub: string, verde: bool }
+export struct Tecla { rotulo: string, x: length, y: length, w: length, h: length, cor: color, fonte: length }
+
+// Caixa do i-ésimo item numa grade de 2 colunas x 4 linhas (paisagem)
+component Celula inherits Rectangle {
+    in property <int> indice;
+    x: 30px + (root.indice >= 4 ? 617px : 0px);
+    y: 95px + mod(root.indice, 4) * 124px;
+    width: 603px;
+    height: 110px;
+    border-radius: 18px;
+}
+
+component Rodape inherits Rectangle {
+    in property <string> esquerda: "Voltar";
+    in property <string> direita;
+    callback clicou-esquerda;
+    callback clicou-direita;
+    y: 620px;  // 720 - 100: rodapé da tela
+    height: 80px;
+    Botao { x: 30px; width: root.direita == "" ? 1220px : 602px; height: 80px; texto: root.esquerda;
+            clicado => { root.clicou-esquerda(); } }
+    if root.direita != "": Botao { x: 648px; width: 602px; height: 80px; texto: root.direita;
+            clicado => { root.clicou-direita(); } }
+}
+
+component Titulo inherits Text {
+    y: 20px;
+    width: 1280px;
+    font-size: 44px;
+    font-family: "DejaVu Sans Bold";
+    color: Cores.texto;
+    horizontal-alignment: center;
+}
+
+// ------------------------------------------------------------------- Wi-Fi
+
+component TelaWifi inherits Rectangle {
+    in property <[Rede]> redes;
+    callback escolher(string, bool);
+    callback procurar();
+    callback voltar();
+    Titulo { text: "Redes Wi-Fi"; }
+    if root.redes.length == 0: Text { y: 300px; width: 1280px; text: "procurando..."; font-size: 34px;
+                                      color: Cores.apagado; horizontal-alignment: center; }
+    for r[i] in root.redes: Celula {
+        indice: i;
+        background: toque.pressed ? Cores.cartao.brighter(40%) : Cores.cartao;
+        border-width: r.conectada ? 3px : 0px;
+        border-color: Cores.bom;
+        Text { x: 25px; y: 30px; text: r.ssid; font-size: 34px; color: Cores.texto; }
+        // cadeado desenhado (a fonte não tem o emoji)
+        if r.segura: Rectangle { x: parent.width - 140px; y: 46px; width: 26px; height: 24px;
+                                 background: Cores.apagado; border-radius: 3px; }
+        if r.segura: Rectangle { x: parent.width - 135px; y: 32px; width: 16px; height: 20px;
+                                 border-width: 3px; border-color: Cores.apagado; border-radius: 8px; }
+        for k in 4: Rectangle {
+            x: parent.width - 90px + k * 16px;
+            y: 72px - (12px + k * 9px);
+            width: 10px; height: 12px + k * 9px;
+            background: k < r.barras ? Cores.texto : Cores.tecla;
+        }
+        toque := TouchArea { clicked => { root.escolher(r.ssid, r.segura); } }
+    }
+    Rodape { width: parent.width; direita: "Procurar"; clicou-esquerda => { root.voltar(); }
+             clicou-direita => { root.procurar(); } }
+}
+
+// ---------------------------------------------------------- teclado na tela
+
+component TelaTeclado inherits Rectangle {
+    in property <string> texto;
+    in property <string> vazio;
+    in property <bool> ocultar;
+    in property <bool> mostra-botao-ocultar;
+    in property <string> confirmar;
+    in property <[Tecla]> teclas;
+    callback tecla(string);
+    Rectangle {
+        x: 30px; y: 20px; width: 730px; height: 80px; border-radius: 18px; background: Cores.cartao;
+        Text { x: 25px; text: root.texto == "" ? root.vazio : root.texto; font-size: 34px;
+               color: root.texto == "" ? Cores.apagado : Cores.texto; vertical-alignment: center; }
+    }
+    if root.mostra-botao-ocultar: Botao { x: 775px; y: 20px; width: 215px; height: 80px; fonte: 26px;
+            texto: root.ocultar ? "mostrar" : "ocultar"; clicado => { root.tecla("[mostrar]"); } }
+    Botao { x: 1005px; y: 20px; width: 245px; height: 80px; fonte: 26px; texto: "Cancelar";
+            clicado => { root.tecla("[cancelar]"); } }
+    for t in root.teclas: Botao {
+        x: t.x; y: t.y; width: t.w; height: t.h; texto: t.rotulo; cor: t.cor; fonte: t.fonte;
+        clicado => { root.tecla(t.rotulo); }
+    }
+}
+
+// --------------------------------------------------------------- Bluetooth
+
+component TelaBt inherits Rectangle {
+    in property <[Aparelho]> aparelhos;
+    in property <bool> procurando;
+    in property <bool> pronto;
+    in property <string> mensagem;
+    callback acao(string, string);
+    callback procurar();
+    callback voltar();
+    Titulo { text: "Bluetooth"; }
+    if root.aparelhos.length == 0: Text {
+        y: 300px; width: 1280px; font-size: 34px; color: Cores.apagado; horizontal-alignment: center;
+        text: !root.pronto ? "Bluetooth iniciando..." : root.procurando ? "procurando..." : "toque em Procurar";
+    }
+    for a[i] in root.aparelhos: Celula {
+        indice: i;
+        background: toque.pressed ? Cores.cartao.brighter(40%) : Cores.cartao;
+        border-width: a.conectado ? 3px : 0px;
+        border-color: Cores.bom;
+        toque := TouchArea {
+            clicked => {
+                if (!a.ocupado) {
+                    root.acao(a.conectado ? "disconnect" : a.pareado ? "connect" : "pair", a.mac);
+                }
+            }
+        }
+        Text { x: 25px; y: 18px; text: a.nome; font-size: 34px; color: Cores.texto; }
+        Text { x: 25px; y: 66px; text: a.sub; font-size: 26px; color: a.conectado ? Cores.bom : Cores.apagado; }
+        if a.pareado: Botao { x: parent.width - 85px; y: 20px; width: 65px; height: 70px; texto: "✕";
+                              clicado => { root.acao("remove", a.mac); } }
+        if a.conectado && a.som: Botao { x: parent.width - 165px; y: 20px; width: 65px; height: 70px;
+                                         texto: "♪"; cor: #286e46; clicado => { root.acao("som", a.mac); } }
+    }
+    if root.mensagem != "": Text { y: parent.height - 145px; width: 1280px; text: root.mensagem;
+                                   font-size: 26px; color: Cores.apagado; horizontal-alignment: center; }
+    Rodape { width: parent.width; direita: root.procurando ? "procurando..." : "Procurar";
+             clicou-esquerda => { root.voltar(); } clicou-direita => { root.procurar(); } }
+}
+
+// ------------------------------------------------------------------ música
+
+component TelaMusica inherits Rectangle {
+    in property <bool> tem-tocando;
+    in property <bool> configurado;
+    callback abrir(string);
+    callback voltar();
+    Titulo { text: "Música"; }
+    if !root.configurado: Text { y: 300px; width: 1280px; text: "sem /etc/revive/navidrome.conf";
+                                 font-size: 26px; color: Cores.ruim; horizontal-alignment: center; }
+    property <[{nome: string, chave: string}]> opcoes: root.tem-tocando ? [
+        {nome: "Tocando agora", chave: "tocando"}, {nome: "Artistas", chave: "artistas"},
+        {nome: "Álbuns recentes", chave: "newest"}, {nome: "Álbuns mais tocados", chave: "frequent"},
+        {nome: "Álbuns aleatórios", chave: "random"}, {nome: "Músicas aleatórias", chave: "aleatorias"},
+        {nome: "Playlists", chave: "playlists"}, {nome: "Buscar", chave: "buscar"}
+    ] : [
+        {nome: "Artistas", chave: "artistas"}, {nome: "Álbuns recentes", chave: "newest"},
+        {nome: "Álbuns mais tocados", chave: "frequent"}, {nome: "Álbuns aleatórios", chave: "random"},
+        {nome: "Músicas aleatórias", chave: "aleatorias"}, {nome: "Playlists", chave: "playlists"},
+        {nome: "Buscar", chave: "buscar"}
+    ];
+    for o[i] in root.opcoes: Botao {
+        x: 30px + (i >= 4 ? 617px : 0px); y: 95px + mod(i, 4) * 124px; width: 603px; height: 110px;
+        texto: o.nome; cor: Cores.cartao; clicado => { root.abrir(o.chave); }
+    }
+    Rodape { width: parent.width; clicou-esquerda => { root.voltar(); } }
+}
+
+component TelaLetras inherits Rectangle {
+    callback letra(string);
+    callback voltar();
+    Titulo { text: "Artistas"; }
+    property <[string]> letras: ["A","B","C","D","E","F","G","H","I","J","K","L","M","N",
+                                 "O","P","Q","R","S","T","U","V","W","X","Y","Z","#"];
+    for l[i] in root.letras: Botao {
+        x: 30px + mod(i, 9) * 137px; y: 95px + floor(i / 9) * 162px; width: 125px; height: 150px;
+        texto: l; fonte: 44px; clicado => { root.letra(l); }
+    }
+    Rodape { width: parent.width; clicou-esquerda => { root.voltar(); } }
+}
+
+component TelaLista inherits Rectangle {
+    in property <string> titulo;
+    in property <[Item]> itens;
+    in property <string> vazio;
+    in property <int> pagina;
+    in property <int> paginas;
+    callback item(int);
+    callback pagina-mudar(int);
+    callback voltar();
+    Titulo { text: root.titulo; }
+    if root.itens.length == 0: Text { y: 300px; width: 1280px; text: root.vazio; font-size: 34px;
+                                      color: Cores.apagado; horizontal-alignment: center; }
+    for it[i] in root.itens: Celula {
+        indice: i;
+        background: toque.pressed ? (it.verde ? #286e46 : Cores.cartao).brighter(40%)
+                                  : (it.verde ? #286e46 : Cores.cartao);
+        Text { x: 25px; y: it.sub == "" ? 35px : 18px; text: it.titulo; font-size: 34px; color: Cores.texto; }
+        if it.sub != "": Text { x: 25px; y: 66px; text: it.sub; font-size: 26px; color: Cores.apagado; }
+        toque := TouchArea { clicked => { root.item(i); } }
+    }
+    Botao { x: 30px; y: parent.height - 100px; width: 370px; height: 80px; texto: "Voltar";
+            clicado => { root.voltar(); } }
+    if root.paginas > 1: Text { x: 600px; y: parent.height - 85px; width: 150px;
+            text: (root.pagina + 1) + "/" + root.paginas; font-size: 26px; color: Cores.apagado;
+            horizontal-alignment: center; }
+    if root.paginas > 1: Botao { x: 810px; y: parent.height - 100px; width: 210px; height: 80px; texto: "◀";
+            fonte: 44px; clicado => { root.pagina-mudar(-1); } }
+    if root.paginas > 1: Botao { x: 1040px; y: parent.height - 100px; width: 210px; height: 80px; texto: "▶";
+            fonte: 44px; clicado => { root.pagina-mudar(1); } }
+}
+
+component TelaTocando inherits Rectangle {
+    in property <bool> ativo;
+    in property <string> titulo;
+    in property <string> artista;
+    in property <string> album;
+    in property <image> capa;
+    in property <float> progresso;
+    in property <string> tempo;
+    in property <string> duracao;
+    in property <string> posicao;
+    in property <bool> pausa;
+    in property <string> volume;
+    callback controle(string);
+    callback pular(float);
+    callback ir(string);
+    if !root.ativo: Text { y: 300px; width: 1280px; text: "nada tocando"; font-size: 34px;
+                           color: Cores.apagado; horizontal-alignment: center; }
+    // capa quadrada à esquerda
+    Rectangle {
+        x: 30px; y: 30px; width: 660px; height: 660px; border-radius: 20px; background: Cores.cartao;
+        Text { text: "♪"; font-size: 160px; color: Cores.apagado; }
+        Image { width: parent.width; height: parent.height; source: root.capa; image-fit: contain; }
+    }
+    property <length> x0: 730px;
+    property <length> largura: 510px;
+    Text { x: root.x0; y: 40px; width: root.largura; text: root.titulo; font-size: 44px;
+           font-family: "DejaVu Sans Bold"; color: Cores.texto; horizontal-alignment: center; overflow: elide; }
+    Text { x: root.x0; y: 105px; width: root.largura; text: root.artista; font-size: 34px;
+           color: Cores.apagado; horizontal-alignment: center; overflow: elide; }
+    Text { x: root.x0; y: 155px; width: root.largura; text: root.album; font-size: 26px;
+           color: Cores.apagado; horizontal-alignment: center; overflow: elide; }
+    // barra de progresso (toque nela para pular)
+    Rectangle { x: root.x0; y: 229px; width: root.largura; height: 12px; border-radius: 6px;
+                background: Cores.tecla; }
+    Rectangle { x: root.x0; y: 229px; width: root.largura * root.progresso; height: 12px; border-radius: 6px;
+                background: Cores.destaque; }
+    TouchArea { x: root.x0; y: 200px; width: root.largura; height: 60px;
+                clicked => { root.pular(self.mouse-x / self.width); } }
+    Text { x: root.x0; y: 252px; text: root.tempo; font-size: 26px; color: Cores.apagado; }
+    Text { x: root.x0; y: 252px; width: root.largura; text: root.posicao; font-size: 26px; color: Cores.apagado;
+           horizontal-alignment: center; }
+    Text { x: root.x0; y: 252px; width: root.largura; text: root.duracao; font-size: 26px;
+           color: Cores.apagado; horizontal-alignment: right; }
+    // controles desenhados (a fonte não tem os símbolos de mídia)
+    Botao { x: root.x0; y: 310px; width: 156px; height: 120px; clicado => { root.controle("anterior"); }
+        Rectangle { x: 55px; y: 35px; width: 8px; height: 50px; background: Cores.texto; }
+        Path { x: 62px; y: 35px; width: 40px; height: 50px; commands: "M 35 0 L 35 50 L 0 25 Z"; fill: Cores.texto; }
+    }
+    Botao { x: root.x0 + 177px; y: 310px; width: 156px; height: 120px; clicado => { root.controle("pausar"); }
+        if root.pausa: Path { x: 60px; y: 30px; width: 46px; height: 60px; commands: "M 0 0 L 0 60 L 46 30 Z";
+                              fill: Cores.texto; }
+        if !root.pausa: Rectangle { x: 56px; y: 32px; width: 16px; height: 56px; background: Cores.texto; }
+        if !root.pausa: Rectangle { x: 84px; y: 32px; width: 16px; height: 56px; background: Cores.texto; }
+    }
+    Botao { x: root.x0 + 354px; y: 310px; width: 156px; height: 120px; clicado => { root.controle("proxima"); }
+        Path { x: 55px; y: 35px; width: 40px; height: 50px; commands: "M 0 0 L 0 50 L 35 25 Z"; fill: Cores.texto; }
+        Rectangle { x: 92px; y: 35px; width: 8px; height: 50px; background: Cores.texto; }
+    }
+    Botao { x: root.x0; y: 455px; width: 150px; height: 80px; texto: "vol −"; fonte: 26px;
+            clicado => { root.controle("vol-"); } }
+    Text { x: root.x0; y: 482px; width: root.largura; text: root.volume; font-size: 26px; color: Cores.apagado;
+           horizontal-alignment: center; }
+    Botao { x: root.x0 + root.largura - 150px; y: 455px; width: 150px; height: 80px; texto: "vol +"; fonte: 26px;
+            clicado => { root.controle("vol+"); } }
+    Botao { x: root.x0; y: 610px; width: 247px; height: 80px; texto: "Início"; fonte: 26px;
+            clicado => { root.ir("inicio"); } }
+    Botao { x: root.x0 + 263px; y: 610px; width: 247px; height: 80px; texto: "Música"; fonte: 26px;
+            clicado => { root.ir("musica"); } }
+}
+
+component Prompt inherits Rectangle {
+    in property <string> codigo;
+    in property <string> texto;
+    callback cancelar();
+    background: black;
+    TouchArea {}  // nada por trás responde enquanto o código está na tela
+    Rectangle {
+        x: 240px; y: 90px; width: 800px; height: 540px; border-radius: 28px; background: Cores.cartao;
+        Text { y: 40px; width: parent.width; text: "Parear teclado"; font-size: 44px;
+               font-family: "DejaVu Sans Bold"; color: Cores.texto; horizontal-alignment: center; }
+        Text { y: 130px; width: parent.width; text: root.codigo; font-size: 120px;
+               font-family: "DejaVu Sans Bold"; color: Cores.destaque; horizontal-alignment: center; }
+        Text { y: 300px; width: parent.width; text: root.texto; font-size: 26px; color: Cores.apagado;
+               horizontal-alignment: center; }
+        Botao { x: 240px; y: 390px; width: 320px; height: 90px; texto: "Cancelar"; fonte: 26px;
+                clicado => { root.cancelar(); } }
+    }
+}
+
+export component AppWindow inherits Window {
+    width: 1280px;
+    height: 720px;
+    background: Cores.fundo;
+    default-font-family: "DejaVu Sans";
+
+    // O compilador só embute os caracteres que aparecem em textos literais (mais o ASCII):
+    // estes são os que podem chegar em textos dinâmicos (redes, músicas, aparelhos).
+    out property <string> caracteres-embutidos:
+        "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
+        + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●";
+
+    in-out property <string> tela: "inicio";
+    in property <string> aviso;
+    in property <bool> mouse-visivel;
+    in property <length> mouse-x;
+    in property <length> mouse-y;
+
+    // início
+    in property <string> hora;
+    in property <string> data;
+    in property <string> btc-brl;
+    in property <string> btc-usd;
+    in property <string> btc-variacao;
+    in property <bool> btc-subiu;
+    in property <string> btc-info;
+    in property <string> wifi-ssid;
+    in property <string> wifi-ip;
+    in property <bool> wifi-ok;
+    in property <string> tocando;
+    in property <string> bt-conectados;
+    // Wi-Fi e teclado
+    in property <[Rede]> redes;
+    in property <string> teclado-texto;
+    in property <string> teclado-vazio;
+    in property <bool> teclado-ocultar;
+    in property <bool> teclado-senha;
+    in property <string> teclado-confirmar;
+    in property <[Tecla]> teclas;
+    // Bluetooth
+    in property <[Aparelho]> aparelhos;
+    in property <bool> bt-procurando;
+    in property <bool> bt-pronto;
+    in property <string> bt-mensagem;
+    in property <string> prompt-codigo;
+    in property <string> prompt-texto;
+    // música
+    in property <bool> musica-configurada;
+    in property <string> lista-titulo;
+    in property <[Item]> itens;
+    in property <string> lista-vazio;
+    in property <int> pagina;
+    in property <int> paginas;
+    in property <bool> toc-ativo;
+    in property <string> toc-titulo;
+    in property <string> toc-artista;
+    in property <string> toc-album;
+    in property <image> toc-capa;
+    in property <float> toc-progresso;
+    in property <string> toc-tempo;
+    in property <string> toc-duracao;
+    in property <string> toc-posicao;
+    in property <bool> toc-pausa;
+    in property <string> toc-volume;
+
+    callback ir(string);
+    callback atualizar-btc();
+    callback wifi-procurar();
+    callback wifi-escolher(string, bool);
+    callback tecla(string);
+    callback bt-acao(string, string);
+    callback bt-procurar();
+    callback musica-abrir(string);
+    callback letra(string);
+    callback item(int);
+    callback pagina-mudar(int);
+    callback lista-voltar();
+    callback controle(string);
+    callback pular(float);
+    callback tecla-fisica(string);
+
+    // teclado físico (USB/Bluetooth): Enter, Esc, apagar e letras
+    FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Escape) { root.tecla-fisica("[esc]"); return accept; }
+            if (e.text == Key.Return) { root.tecla-fisica("[enter]"); return accept; }
+            if (e.text == Key.Backspace) { root.tecla-fisica("[apagar]"); return accept; }
+            root.tecla-fisica(e.text);
+            accept
+        }
+
+        if root.tela == "inicio": Inicio {
+            width: 1280px; height: 720px;
+            hora: root.hora; data: root.data;
+            btc-brl: root.btc-brl; btc-usd: root.btc-usd; btc-variacao: root.btc-variacao;
+            btc-subiu: root.btc-subiu; btc-info: root.btc-info;
+            wifi-ssid: root.wifi-ssid; wifi-ip: root.wifi-ip; wifi-ok: root.wifi-ok;
+            tocando: root.tocando; bt-conectados: root.bt-conectados;
+            ir(t) => { root.ir(t); }
+            atualizar-btc => { root.atualizar-btc(); }
+        }
+        if root.tela == "wifi": TelaWifi {
+            width: 1280px; height: 720px; redes: root.redes;
+            escolher(s, p) => { root.wifi-escolher(s, p); }
+            procurar => { root.wifi-procurar(); }
+            voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "teclado": TelaTeclado {
+            width: 1280px; height: 720px; texto: root.teclado-texto; vazio: root.teclado-vazio;
+            ocultar: root.teclado-ocultar; mostra-botao-ocultar: root.teclado-senha;
+            confirmar: root.teclado-confirmar; teclas: root.teclas;
+            tecla(t) => { root.tecla(t); }
+        }
+        if root.tela == "bt": TelaBt {
+            width: 1280px; height: 720px; aparelhos: root.aparelhos; procurando: root.bt-procurando;
+            pronto: root.bt-pronto; mensagem: root.bt-mensagem;
+            acao(a, m) => { root.bt-acao(a, m); }
+            procurar => { root.bt-procurar(); }
+            voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "musica": TelaMusica {
+            width: 1280px; height: 720px; tem-tocando: root.toc-ativo; configurado: root.musica-configurada;
+            abrir(c) => { root.musica-abrir(c); }
+            voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "letras": TelaLetras {
+            width: 1280px; height: 720px;
+            letra(l) => { root.letra(l); }
+            voltar => { root.ir("musica"); }
+        }
+        if root.tela == "lista": TelaLista {
+            width: 1280px; height: 720px; titulo: root.lista-titulo; itens: root.itens;
+            vazio: root.lista-vazio; pagina: root.pagina; paginas: root.paginas;
+            item(i) => { root.item(i); }
+            pagina-mudar(d) => { root.pagina-mudar(d); }
+            voltar => { root.lista-voltar(); }
+        }
+        if root.tela == "tocando": TelaTocando {
+            width: 1280px; height: 720px; ativo: root.toc-ativo; titulo: root.toc-titulo;
+            artista: root.toc-artista; album: root.toc-album; capa: root.toc-capa;
+            progresso: root.toc-progresso; tempo: root.toc-tempo; duracao: root.toc-duracao;
+            posicao: root.toc-posicao; pausa: root.toc-pausa; volume: root.toc-volume;
+            controle(c) => { root.controle(c); }
+            pular(f) => { root.pular(f); }
+            ir(t) => { root.ir(t); }
+        }
+    }
+
+    if root.aviso != "": Text {
+        y: parent.height - 45px; width: parent.width; text: root.aviso; font-size: 26px;
+        color: Cores.apagado; horizontal-alignment: center;
+    }
+    if root.prompt-codigo != "": Prompt {
+        width: 1280px; height: 720px; codigo: root.prompt-codigo; texto: root.prompt-texto;
+        cancelar => { root.bt-acao("cancelar", ""); }
+    }
+    if root.mouse-visivel: Path {
+        x: root.mouse-x; y: root.mouse-y; width: 30px; height: 44px;
+        commands: "M 0 0 L 0 36 L 10 27 L 17 42 L 23 39 L 16 25 L 28 25 Z";
+        fill: Cores.texto; stroke: black; stroke-width: 2px;
+    }
+}

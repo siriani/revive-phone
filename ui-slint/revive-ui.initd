@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+description="Revive: interface na tela (Slint; Python se o binário não existir)"
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+command=/opt/revive/revive-ui
+output_log=/var/log/revive-ui.log
+error_log=/var/log/revive-ui.log
+
+depend() {
+	need localmount
+	after local revive-i2c-retry
+}
+
+start_pre() {
+	if [ ! -x /opt/revive/revive-ui ]; then
+		command=/usr/bin/python3
+		command_args=/opt/revive/app.py
+	fi
+}

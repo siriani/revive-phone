@@ -1,0 +1,204 @@
+//! Revive: interface em Slint para celulares antigos com Linux (postmarketOS).
+//!
+//! Um binário só: desenha no framebuffer com o renderizador por software do Slint
+//! (girado para paisagem e só nas regiões que mudam) e lê touch, teclado e mouse
+//! pelo evdev. Os serviços (revive-bt, revive-mpv) continuam como antes.
+
+mod app;
+mod dados;
+mod musica;
+mod tela;
+
+use std::os::fd::RawFd;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+use slint::platform::{Platform, WindowAdapter};
+use slint::{ComponentHandle, PhysicalSize};
+
+slint::include_modules!();
+
+type Tarefa = Box<dyn FnOnce() + Send>;
+
+/// Fila de tarefas mandadas por outras threads + pipe que acorda o laço principal.
+#[derive(Clone)]
+struct Correio {
+    fila: Arc<Mutex<Vec<Tarefa>>>,
+    pipe_w: RawFd,
+}
+
+impl slint::platform::EventLoopProxy for Correio {
+    fn quit_event_loop(&self) -> Result<(), slint::EventLoopError> {
+        std::process::exit(0)
+    }
+    fn invoke_from_event_loop(&self, t: Tarefa) -> Result<(), slint::EventLoopError> {
+        self.fila.lock().unwrap().push(t);
+        unsafe { libc::write(self.pipe_w, b"x".as_ptr() as *const _, 1) };
+        Ok(())
+    }
+}
+
+struct Plataforma {
+    janela: Rc<MinimalSoftwareWindow>,
+    correio: Correio,
+}
+
+impl Platform for Plataforma {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+        Ok(self.janela.clone())
+    }
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn slint::platform::EventLoopProxy>> {
+        Some(Box::new(self.correio.clone()))
+    }
+}
+
+/// Input boost: frequência mínima no máximo enquanto a pessoa mexe na tela.
+fn cpu_min(alto: bool) {
+    let base = "/sys/devices/system/cpu/cpu0/cpufreq";
+    let qual = if alto { "max" } else { "min" };
+    if let Ok(v) = std::fs::read_to_string(format!("{base}/cpuinfo_{qual}_freq")) {
+        let _ = std::fs::write(format!("{base}/scaling_min_freq"), v.trim());
+    }
+}
+
+/// Lado em que o celular está deitado (acelerômetro); None = deitado/indefinido.
+fn rotacao_acelerometro() -> Option<tela::Rotacao> {
+    let dir = std::fs::read_dir("/sys/bus/iio/devices").ok()?;
+    for d in dir.flatten() {
+        let p = d.path().join("in_accel_y_raw");
+        if let Ok(v) = std::fs::read_to_string(&p) {
+            let y: i32 = v.trim().parse().ok()?;
+            return if y > 600 {
+                Some(tela::Rotacao::R270)
+            } else if y < -600 {
+                Some(tela::Rotacao::R90)
+            } else {
+                None
+            };
+        }
+    }
+    None
+}
+
+const ROT_FILE: &str = "/var/lib/revive/rotation";
+
+fn main() {
+    let mut tela = tela::Tela::abrir().expect("não abriu /dev/fb0");
+    tela.rot = match std::fs::read_to_string(ROT_FILE).map(|s| s.trim().to_string()).as_deref() {
+        Ok("90") => tela::Rotacao::R90,
+        _ => tela::Rotacao::R270,
+    };
+    eprintln!("fb {}x{} {} bpp, rotação {:?}", tela.pw, tela.ph, tela.bpp, tela.rot);
+
+    let janela = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    janela.set_size(PhysicalSize::new(tela.ph, tela.pw)); // paisagem
+    let mut pipe = [0; 2];
+    unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    let correio = Correio { fila: Arc::new(Mutex::new(vec![])), pipe_w: pipe[1] };
+    slint::platform::set_platform(Box::new(Plataforma { janela: janela.clone(), correio: correio.clone() }))
+        .unwrap();
+
+    let ui = AppWindow::new().unwrap();
+    app::ligar(&ui);
+    ui.show().unwrap();
+
+    let mut entrada = tela::Entrada::nova();
+    let mut boost_ate: Option<Instant> = None;
+    let mut ultima_rot = Instant::now();
+    let mut votos = 0;
+    let mut quadros = 0u32;
+
+    loop {
+        slint::platform::update_timers_and_animations();
+
+        // tarefas das outras threads (dados novos)
+        let tarefas: Vec<Tarefa> = std::mem::take(&mut *correio.fila.lock().unwrap());
+        for t in tarefas {
+            t();
+        }
+
+        // redesenha só o que mudou
+        let t0 = Instant::now();
+        let desenhou = janela.draw_if_needed(|r| tela.desenhar(r));
+        if desenhou {
+            quadros += 1;
+            if let Some(toque) = entrada.ultimo_toque.take() {
+                if quadros % 10 == 1 {
+                    eprintln!("quadro: desenho {:?}, toque->tela {:?}", t0.elapsed(), toque.elapsed());
+                }
+            }
+        }
+
+        // espera entrada, tarefa ou o próximo timer do Slint
+        entrada.buscar();
+        let mut fds: Vec<libc::pollfd> = entrada
+            .fds()
+            .into_iter()
+            .chain(std::iter::once(pipe[0]))
+            .map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 })
+            .collect();
+        let espera = if janela.has_active_animations() {
+            Duration::ZERO
+        } else {
+            slint::platform::duration_until_next_timer_update()
+                .unwrap_or(Duration::from_millis(500))
+                .min(Duration::from_millis(500))
+        };
+        unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, espera.as_millis() as i32) };
+
+        let mut houve_entrada = false;
+        for p in &fds {
+            if p.revents == 0 {
+                continue;
+            }
+            if p.fd == pipe[0] {
+                let mut lixo = [0u8; 64];
+                unsafe { libc::read(pipe[0], lixo.as_mut_ptr() as *mut _, lixo.len()) };
+                continue;
+            }
+            for ev in entrada.ler(p.fd, &tela) {
+                houve_entrada = true;
+                janela.window().dispatch_event(ev);
+            }
+        }
+        ui.set_mouse_visivel(entrada.mouse_usado);
+        ui.set_mouse_x(entrada.mx);
+        ui.set_mouse_y(entrada.my);
+
+        if houve_entrada {
+            if boost_ate.is_none() {
+                cpu_min(true);
+            }
+            boost_ate = Some(Instant::now() + Duration::from_secs(3));
+        } else if boost_ate.is_some_and(|t| Instant::now() > t) {
+            boost_ate = None;
+            cpu_min(false);
+        }
+
+        // gira conforme o lado em que o celular está (duas leituras seguidas)
+        if ultima_rot.elapsed() > Duration::from_millis(700) {
+            ultima_rot = Instant::now();
+            match rotacao_acelerometro() {
+                Some(r) if r != tela.rot => {
+                    votos += 1;
+                    if votos >= 2 {
+                        votos = 0;
+                        tela.rot = r;
+                        let _ = std::fs::write(ROT_FILE, if r == tela::Rotacao::R90 { "90" } else { "270" });
+                        // girou: a próxima tela precisa ser desenhada inteira
+                        tela.redesenhar_tudo = true;
+                        janela.request_redraw();
+                    }
+                }
+                _ => votos = 0,
+            }
+        }
+
+        if tela.trocou() {
+            eprintln!("framebuffer trocou (driver DRM assumiu): reiniciando");
+            std::process::exit(1); // o OpenRC (ou o laço de quem chamou) sobe de novo
+        }
+    }
+}
