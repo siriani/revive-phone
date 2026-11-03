@@ -1,0 +1,8 @@
+#!/sbin/openrc-run
+description="Revive: logs persistentes (kernel + saúde)"
+command=/usr/local/sbin/revive-health
+command_background=true
+pidfile=/run/revive-health.pid
+depend() {
+	need localmount
+}
