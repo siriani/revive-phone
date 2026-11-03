@@ -42,7 +42,7 @@ component Cartao inherits Rectangle {
     border-radius: 28px;
 }
 
-component Inicio inherits Rectangle {
+component Painel inherits Rectangle {
     in property <string> hora;
     in property <string> data;
     in property <string> btc-brl;
@@ -86,17 +86,54 @@ component Inicio inherits Rectangle {
                color: root.wifi-ok ? Cores.texto : Cores.apagado; }
         Text { x: 30px; y: 135px; text: root.wifi-ip; font-size: 26px; color: Cores.apagado; }
     }
-    Botao { x: 650px; y: 230px; width: 190px; height: 100px; texto: "Wi-Fi"; clicado => { root.ir("wifi"); } }
-    Botao { x: 855px; y: 230px; width: 190px; height: 100px; texto: "Bluetooth"; fonte: 26px;
-            clicado => { root.ir("bt"); } }
-    Botao { x: 1060px; y: 230px; width: 190px; height: 100px; texto: "Atualizar"; fonte: 26px;
+    Botao { x: 650px; y: 230px; width: 600px; height: 100px; texto: "Atualizar preço"; fonte: 34px;
             cor: Cores.btc-botao; clicado => { root.atualizar-btc(); } }
-    Botao { x: 650px; y: 350px; width: 600px; height: 120px; cor: Cores.musica;
-            texto: root.tocando == "" ? "♪ Música" : root.tocando;
-            fonte: root.tocando == "" ? 34px : 26px;
-            clicado => { root.ir(root.tocando == "" ? "musica" : "tocando"); } }
-    Text { x: 650px; y: 495px; width: 600px; text: root.bt-conectados; font-size: 26px;
-           color: Cores.apagado; horizontal-alignment: center; }
+    Botao { x: 650px; y: 590px; width: 600px; height: 100px; texto: "◀ Início";
+            clicado => { root.ir("inicio"); } }
+}
+
+// ------------------------------------------------------------------ lançador
+
+// Um app na tela inicial. Os apps nativos são registrados em src/app.rs (APPS).
+export struct AppInfo { id: string, nome: string, icone: string, cor: color }
+
+component Lancador inherits Rectangle {
+    in property <string> hora;
+    in property <string> data;
+    in property <string> wifi-ssid;
+    in property <bool> wifi-ok;
+    in property <string> bt-conectados;
+    in property <string> tocando;
+    in property <[AppInfo]> apps;
+    callback abrir(string);
+    // barra de status
+    Text { x: 30px; y: 12px; text: root.hora; font-size: 64px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
+    Text { x: 255px; y: 40px; text: root.data; font-size: 26px; color: Cores.apagado; }
+    Text { x: 640px; y: 22px; width: 610px; horizontal-alignment: right; font-size: 26px;
+           text: root.wifi-ok ? "Wi-Fi: " + root.wifi-ssid : "Wi-Fi desconectado";
+           color: root.wifi-ok ? Cores.bom : Cores.ruim; }
+    Text { x: 640px; y: 58px; width: 610px; horizontal-alignment: right; font-size: 26px;
+           text: root.bt-conectados; color: Cores.apagado; }
+    // grade de apps: 4 por linha
+    for a[i] in root.apps: Rectangle {
+        x: 30px + mod(i, 4) * 310px;
+        y: 115px + floor(i / 4) * 250px;
+        width: 290px;
+        height: 230px;
+        border-radius: 28px;
+        background: toque.pressed ? a.cor.brighter(40%) : a.cor;
+        Text { y: 25px; width: parent.width; text: a.icone; font-size: 96px; color: Cores.texto;
+               horizontal-alignment: center; }
+        Text { y: 165px; width: parent.width; text: a.nome; font-size: 34px; color: Cores.texto;
+               horizontal-alignment: center; }
+        toque := TouchArea { clicked => { root.abrir(a.id); } }
+    }
+    // mini player: aparece quando tem música tocando
+    if root.tocando != "": Botao {
+        x: 30px; y: 625px; width: 1220px; height: 75px; cor: Cores.musica; fonte: 26px;
+        texto: root.tocando;
+        clicado => { root.abrir("tocando"); }
+    }
 }
 
 // ------------------------------------------------------------------ dados
@@ -408,9 +445,11 @@ export component AppWindow inherits Window {
     // estes são os que podem chegar em textos dinâmicos (redes, músicas, aparelhos).
     out property <string> caracteres-embutidos:
         "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
-        + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●";
+        + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●"
+        + "◷≋✱⚙☁✉★⌂";  // ícones dos apps (vêm do Rust, não estão em literais)
 
     in-out property <string> tela: "inicio";
+    in property <[AppInfo]> apps;
     in property <string> aviso;
     in property <bool> mouse-visivel;
     in property <length> mouse-x;
@@ -489,7 +528,13 @@ export component AppWindow inherits Window {
             accept
         }
 
-        if root.tela == "inicio": Inicio {
+        if root.tela == "inicio": Lancador {
+            width: 1280px; height: 720px;
+            hora: root.hora; data: root.data; wifi-ssid: root.wifi-ssid; wifi-ok: root.wifi-ok;
+            bt-conectados: root.bt-conectados; tocando: root.tocando; apps: root.apps;
+            abrir(id) => { root.ir(id); }
+        }
+        if root.tela == "painel": Painel {
             width: 1280px; height: 720px;
             hora: root.hora; data: root.data;
             btc-brl: root.btc-brl; btc-usd: root.btc-usd; btc-variacao: root.btc-variacao;

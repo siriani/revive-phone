@@ -12,9 +12,19 @@ use slint::{Color, ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffe
 
 use crate::dados;
 use crate::musica::{self, Subsonic};
-use crate::{AppWindow, Aparelho, Item, Rede, Tecla};
+use crate::{AppInfo, AppWindow, Aparelho, Item, Rede, Tecla};
 
 const POR_PAGINA: usize = 8;
+
+/// Apps nativos do lançador: (id da tela, nome, ícone, cor de fundo).
+/// Para criar um app: uma tela em ui/app.slint (`if root.tela == "<id>"`) + uma linha aqui.
+/// O ícone é um caractere da fonte embutida (listado em `caracteres-embutidos`).
+const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
+    ("painel", "Painel", "◷", (70, 55, 30)),
+    ("musica", "Música", "♫", (40, 60, 90)),
+    ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
+    ("bt", "Bluetooth", "✱", (45, 58, 90)),
+];
 
 #[derive(Clone)]
 enum Acao {
@@ -685,6 +695,16 @@ fn bt_acao(ui: &AppWindow, acao: &str, mac: &str) {
 
 pub fn ligar(ui: &AppWindow) {
     ui.set_musica_configurada(api().configurado());
+    let apps: Vec<AppInfo> = APPS
+        .iter()
+        .map(|(id, nome, icone, (r, g, b))| AppInfo {
+            id: ss(*id),
+            nome: ss(*nome),
+            icone: ss(*icone),
+            cor: Color::from_rgb_u8(*r, *g, *b),
+        })
+        .collect();
+    ui.set_apps(ModelRc::new(VecModel::from(apps)));
 
     // relógio
     let fraca = ui.as_weak();
