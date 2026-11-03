@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="Revive: Bluetooth (pareamento e conexão pela tela)"
+command=/usr/bin/python3
+command_args="/usr/local/sbin/revive-bt"
+command_background=true
+pidfile=/run/revive-bt.pid
+depend() {
+	need dbus bluetooth
+	after bluealsa
+	before revive-ui
+}
