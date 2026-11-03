@@ -1,0 +1,15 @@
+#!/bin/sh
+# Wi-Fi do falcon (WCN3620): o firmware trava com agregação 802.11n (ADD_BA), então o
+# wpa_supplicant roda à parte com disable_ht=1 nas redes (o NetworkManager não deixa).
+# MAC fixo opcional em /etc/revive/wifi-mac (o driver não lê o MAC de fábrica).
+CONF=/etc/revive/wpa_supplicant.conf
+( for i in $(seq 1 60); do [ -e /sys/class/net/wlan0 ] && break; sleep 2; done
+  sleep 25  # o firmware termina de subir depois que a interface aparece
+  if [ -s /etc/revive/wifi-mac ]; then
+	ip link set wlan0 down
+	ip link set wlan0 address "$(cat /etc/revive/wifi-mac)"
+	ip link set wlan0 up
+  fi
+  wpa_supplicant -B -i wlan0 -c "$CONF" -P /run/revive-wpa.pid
+  iw dev wlan0 set power_save off
+  udhcpc -i wlan0 -b -S ) >/dev/null 2>&1 &

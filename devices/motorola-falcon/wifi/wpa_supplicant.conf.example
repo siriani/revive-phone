@@ -1,0 +1,9 @@
+ctrl_interface=/run/revive-wpa
+update_config=1
+
+# A interface do Revive adiciona redes sozinha (com disable_ht=1 neste aparelho).
+network={
+	ssid="MinhaRede"
+	psk="senha-da-rede"
+	disable_ht=1
+}

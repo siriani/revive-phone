@@ -1,0 +1,3 @@
+#!/bin/sh
+[ "$1" = post-commit ] && /usr/local/sbin/revive-fixboot
+exit 0

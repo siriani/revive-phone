@@ -1,0 +1,51 @@
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Subject: [PATCH] wifi: wcn36xx: don't dereference a missing band on 2.4 GHz-only chips
+
+The WCN3620 only registers the 2.4 GHz band, but during scans the firmware
+reports some frames as 5 GHz. wcn36xx_update_survey() then dereferences a
+NULL sband inside the IRQ handler and the whole SoC hard-locks until the
+watchdog resets it (about 3 minutes after Wi-Fi comes up).
+
+- wcn36xx_update_survey(): return if the band is not registered (same idea
+  as the fix posted to linux-wireless in October 2026);
+- wcn36xx_rx_skb(): drop frames for bands the wiphy does not have, so
+  mac80211 does not WARN on them either.
+
+Tested on the Motorola Moto G 2013 (falcon, WCN3620), Linux 6.16.
+
+diff -ruN a/drivers/net/wireless/ath/wcn36xx/txrx.c b/drivers/net/wireless/ath/wcn36xx/txrx.c
+--- a/drivers/net/wireless/ath/wcn36xx/txrx.c	2026-11-02 22:36:37.827477244 -0300
++++ b/drivers/net/wireless/ath/wcn36xx/txrx.c	2026-11-02 22:36:37.838477489 -0300
+@@ -286,6 +286,10 @@
+ 		idx = wcn->hw->wiphy->bands[NL80211_BAND_2GHZ]->n_channels;
+ 
+ 	sband = wcn->hw->wiphy->bands[band];
++	/* WCN3620 only registers 2.4 GHz; scan metadata may still say 5 GHz */
++	if (!sband)
++		return;
++
+ 	channel = sband->channels;
+ 
+ 	for (i = 0; i < sband->n_channels; i++, channel++) {
+@@ -295,6 +299,9 @@
+ 		}
+ 	}
+ 
++	if (i == sband->n_channels)
++		return;
++
+ 	spin_lock(&wcn->survey_lock);
+ 	wcn->chan_survey[idx].rssi = rssi;
+ 	wcn->chan_survey[idx].snr = snr;
+@@ -380,6 +387,11 @@
+ 		status.freq = WCN36XX_CENTER_FREQ(wcn);
+ 	}
+ 
++	/* WCN3620 only registers 2.4 GHz: drop scan frames tagged as 5 GHz
++	 * here (otherwise mac80211 WARNs with a stack trace for each one) */
++	if (!wcn->hw->wiphy->bands[status.band])
++		goto drop;
++
+ 	wcn36xx_update_survey(wcn, status.signal, get_snr(bd),
+ 			      status.band, status.freq);
+ 

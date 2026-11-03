@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+description="Revive (falcon): religa touch e acelerômetro que falham no primeiro probe"
+
+depend() {
+	need localmount
+	before revive-ui
+}
+
+start() {
+	ebegin "Conferindo touch e acelerômetro"
+	# roda em segundo plano: pode levar até alguns minutos e não deve segurar o boot
+	/usr/local/sbin/revive-i2c-retry >/dev/null 2>&1 &
+	eend 0
+}
