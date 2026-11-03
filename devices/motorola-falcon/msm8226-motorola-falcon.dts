@@ -513,7 +513,7 @@
 
 		rmi4-f01@1 {
 			reg = <0x1>;
-			syna,nosleep-mode = <1>;
+			syna,nosleep-mode = <2>;	/* 2 = nunca dormir: com 1 o controlador cochila e o toque chega ~0,5 s atrasado */
 		};
 
 		rmi4-f11@11 {

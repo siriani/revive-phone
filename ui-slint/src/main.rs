@@ -11,6 +11,7 @@ mod tela;
 
 use std::os::fd::RawFd;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -104,35 +105,81 @@ fn main() {
     app::ligar(&ui);
     ui.show().unwrap();
 
+    // Acelerômetro em thread própria: cada leitura do LIS3DH espera uma amostra nova
+    // (~2 s). No laço principal isso travava o toque.
+    let giro = Arc::new(AtomicU8::new(0)); // 0 = sem decisão, 90 ou 27 (=270)
+    {
+        let giro = giro.clone();
+        std::thread::spawn(move || {
+            let mut votos = 0;
+            let mut ultimo = None;
+            loop {
+                let r = rotacao_acelerometro();
+                if r.is_some() && r == ultimo {
+                    votos += 1;
+                } else {
+                    votos = 0;
+                }
+                ultimo = r;
+                if votos >= 1 {
+                    let v = match r {
+                        Some(tela::Rotacao::R90) => 90,
+                        Some(tela::Rotacao::R270) => 27,
+                        None => 0,
+                    };
+                    giro.store(v, Ordering::Relaxed);
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+    }
+
     let mut entrada = tela::Entrada::nova();
     let mut boost_ate: Option<Instant> = None;
-    let mut ultima_rot = Instant::now();
-    let mut votos = 0;
     let mut quadros = 0u32;
 
+    // cronômetro de cada etapa do laço: avisa se alguma passar de 50 ms
+    let etapa = |nome: &str, t: Instant| {
+        let d = t.elapsed();
+        if d > Duration::from_millis(50) {
+            eprintln!("laço lento: {nome} levou {:.0} ms", d.as_secs_f64() * 1000.0);
+        }
+    };
     loop {
+        let t = Instant::now();
         slint::platform::update_timers_and_animations();
+        etapa("timers", t);
 
         // tarefas das outras threads (dados novos)
         let tarefas: Vec<Tarefa> = std::mem::take(&mut *correio.fila.lock().unwrap());
-        for t in tarefas {
-            t();
+        let t = Instant::now();
+        for tarefa in tarefas {
+            tarefa();
         }
+        etapa("tarefas das threads", t);
 
         // redesenha só o que mudou
         let t0 = Instant::now();
         let desenhou = janela.draw_if_needed(|r| tela.desenhar(r));
         if desenhou {
             quadros += 1;
-            if let Some(toque) = entrada.ultimo_toque.take() {
-                if quadros % 10 == 1 {
-                    eprintln!("quadro: desenho {:?}, toque->tela {:?}", t0.elapsed(), toque.elapsed());
-                }
+            let toque = entrada.ultimo_toque.take();
+            if let Some(t) = toque {
+                eprintln!(
+                    "toque: kernel->leitura {:.1} ms, leitura->tela {:.1} ms (desenho {:.1} ms)",
+                    entrada.atraso_evento.take().map(|d| d.as_secs_f64() * 1000.0).unwrap_or(-1.0),
+                    t.elapsed().as_secs_f64() * 1000.0,
+                    t0.elapsed().as_secs_f64() * 1000.0
+                );
+            } else if t0.elapsed() > Duration::from_millis(20) {
+                eprintln!("quadro lento: desenho {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0);
             }
         }
 
         // espera entrada, tarefa ou o próximo timer do Slint
+        let t = Instant::now();
         entrada.buscar();
+        etapa("buscar dispositivos", t);
         let mut fds: Vec<libc::pollfd> = entrada
             .fds()
             .into_iter()
@@ -148,6 +195,7 @@ fn main() {
         };
         unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, espera.as_millis() as i32) };
 
+        let t_ent = Instant::now();
         let mut houve_entrada = false;
         for p in &fds {
             if p.revents == 0 {
@@ -163,6 +211,8 @@ fn main() {
                 janela.window().dispatch_event(ev);
             }
         }
+        etapa("ler e despachar entrada", t_ent);
+        let t = Instant::now();
         ui.set_mouse_visivel(entrada.mouse_usado);
         ui.set_mouse_x(entrada.mx);
         ui.set_mouse_y(entrada.my);
@@ -177,25 +227,23 @@ fn main() {
             cpu_min(false);
         }
 
-        // gira conforme o lado em que o celular está (duas leituras seguidas)
-        if ultima_rot.elapsed() > Duration::from_millis(700) {
-            ultima_rot = Instant::now();
-            match rotacao_acelerometro() {
-                Some(r) if r != tela.rot => {
-                    votos += 1;
-                    if votos >= 2 {
-                        votos = 0;
-                        tela.rot = r;
-                        let _ = std::fs::write(ROT_FILE, if r == tela::Rotacao::R90 { "90" } else { "270" });
-                        // girou: a próxima tela precisa ser desenhada inteira
-                        tela.redesenhar_tudo = true;
-                        janela.request_redraw();
-                    }
-                }
-                _ => votos = 0,
-            }
+        etapa("mouse e boost", t);
+        let t = Instant::now();
+        // gira conforme o lado em que o celular está (decidido pela thread do acelerômetro)
+        let alvo = match giro.load(Ordering::Relaxed) {
+            90 => Some(tela::Rotacao::R90),
+            27 => Some(tela::Rotacao::R270),
+            _ => None,
+        };
+        if let Some(r) = alvo.filter(|r| *r != tela.rot) {
+            tela.rot = r;
+            let _ = std::fs::write(ROT_FILE, if r == tela::Rotacao::R90 { "90" } else { "270" });
+            // girou: a próxima tela precisa ser desenhada inteira
+            tela.redesenhar_tudo = true;
+            janela.request_redraw();
         }
 
+        etapa("acelerômetro", t);
         if tela.trocou() {
             eprintln!("framebuffer trocou (driver DRM assumiu): reiniciando");
             std::process::exit(1); // o OpenRC (ou o laço de quem chamou) sobe de novo

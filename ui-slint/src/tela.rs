@@ -180,6 +180,8 @@ struct Disp {
 
 pub struct Entrada {
     devs: Vec<Disp>,
+    /// eventN já examinados (aceitos ou não): abrir um dispositivo custa dezenas de ms
+    vistos: Vec<PathBuf>,
     ultima_busca: Instant,
     // touch (coordenadas físicas)
     tx: f32,
@@ -193,6 +195,9 @@ pub struct Entrada {
     shift: bool,
     caps: bool,
     pub ultimo_toque: Option<Instant>,
+    /// atraso entre o evento do kernel (relógio do evdev) e a leitura aqui
+    pub atraso_evento: Option<Duration>,
+    ts_syn: Option<std::time::SystemTime>,
 }
 
 const EV_SYN: u16 = 0;
@@ -238,6 +243,7 @@ impl Entrada {
     pub fn nova() -> Entrada {
         let mut e = Entrada {
             devs: vec![],
+            vistos: vec![],
             ultima_busca: Instant::now() - Duration::from_secs(60),
             tx: 0.0,
             ty: 0.0,
@@ -249,6 +255,8 @@ impl Entrada {
             shift: false,
             caps: false,
             ultimo_toque: None,
+            atraso_evento: None,
+            ts_syn: None,
         };
         e.buscar();
         e
@@ -261,12 +269,18 @@ impl Entrada {
         }
         self.ultima_busca = Instant::now();
         let Ok(dir) = std::fs::read_dir("/dev/input") else { return };
-        for ent in dir.flatten() {
-            let caminho = ent.path();
-            let nome = caminho.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !nome.starts_with("event") || self.devs.iter().any(|d| d.caminho == caminho) {
+        let presentes: Vec<PathBuf> = dir
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("event")))
+            .collect();
+        // aparelho que sumiu (Bluetooth desligou) pode voltar com o mesmo eventN
+        self.vistos.retain(|p| presentes.contains(p));
+        for caminho in presentes {
+            if self.vistos.contains(&caminho) {
                 continue;
             }
+            self.vistos.push(caminho.clone());
             let Ok(dev) = Device::open(&caminho) else { continue };
             let abs = dev.supported_absolute_axes().map(|a| a.contains(evdev::AbsoluteAxisCode(ABS_MT_POSITION_X))).unwrap_or(false);
             let rel = dev.supported_relative_axes().map(|r| r.contains(evdev::RelativeAxisCode(REL_X))).unwrap_or(false);
@@ -302,15 +316,21 @@ impl Entrada {
         let Some(i) = self.devs.iter().position(|d| d.dev.as_raw_fd() == fd) else { return vec![] };
         let tipo = self.devs[i].tipo;
         let (max_x, max_y) = (self.devs[i].max_x, self.devs[i].max_y);
-        let lidos = self.devs[i]
-            .dev
-            .fetch_events()
-            .map(|evs| evs.map(|e| (e.event_type().0, e.code(), e.value())).collect::<Vec<_>>());
+        let lidos = self.devs[i].dev.fetch_events().map(|evs| {
+            evs.map(|e| {
+                if e.event_type().0 == EV_SYN {
+                    self.ts_syn = Some(e.timestamp());
+                }
+                (e.event_type().0, e.code(), e.value())
+            })
+            .collect::<Vec<_>>()
+        });
         let eventos = match lidos {
             Ok(evs) => evs,
             Err(_) => {
                 eprintln!("entrada: {:?} saiu", tipo);
-                self.devs.remove(i);
+                let saiu = self.devs.remove(i);
+                self.vistos.retain(|p| *p != saiu.caminho);
                 return vec![];
             }
         };
@@ -342,6 +362,7 @@ impl Entrada {
                 if self.encostou {
                     self.encostou = false;
                     self.ultimo_toque = Some(Instant::now());
+                    self.atraso_evento = self.ts_syn.and_then(|t| t.elapsed().ok());
                     out.push(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
                 }
                 if self.soltou {

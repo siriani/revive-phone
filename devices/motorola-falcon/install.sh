@@ -2,7 +2,7 @@
 # Partes do Revive específicas do Motorola Moto G 2013 (falcon). Chamado pelo install.sh.
 set -e
 cd "$(dirname "$0")"
-apk add -q dtc
+apk add -q dtc i2c-tools
 
 # boot: lk2nd precisa do dtb do falcon e da linha "fdt" no extlinux.conf após cada atualização
 install -m755 boot/revive-fixboot.sh /usr/local/sbin/revive-fixboot
