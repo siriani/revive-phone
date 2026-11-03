@@ -54,6 +54,43 @@ impl Subsonic {
         Subsonic { urls, user, pass, base: Mutex::new(None), agente }
     }
 
+    /// Cliente com dados digitados na tela de configuração (antes de salvar).
+    pub fn com(url: &str, user: &str, pass: &str) -> Subsonic {
+        let mut s = Subsonic::novo();
+        s.urls = url.split_whitespace().map(|u| u.trim_end_matches('/').to_string()).collect();
+        s.user = user.to_string();
+        s.pass = pass.to_string();
+        *s.base.lock().unwrap() = None;
+        s
+    }
+
+    /// Testa a conexão e o login (ping autenticado).
+    pub fn testar(&self) -> Result<(), String> {
+        self.get("ping", &[]).map(|_| ())
+    }
+
+    /// Grava /etc/revive/navidrome.conf (só root lê: tem a senha).
+    pub fn salvar(&self) -> Result<(), String> {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::io::Write;
+        let txt = format!("[navidrome]\nurls = {}\nuser = {}\npass = {}\n", self.urls.join(" "), self.user, self.pass);
+        let tmp = format!("{CONF}.tmp");
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
+        f.write_all(txt.as_bytes()).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, CONF).map_err(|e| e.to_string())
+    }
+
+    pub fn dados(&self) -> (String, String, String) {
+        // todos os endereços, separados por espaço: o primeiro que responder é usado
+        (self.urls.join(" "), self.user.clone(), self.pass.clone())
+    }
+
     pub fn configurado(&self) -> bool {
         !self.urls.is_empty() && !self.user.is_empty()
     }

@@ -282,6 +282,8 @@ component TelaMusica inherits Rectangle {
     callback abrir(string);
     callback voltar();
     Titulo { text: "Música"; }
+    Botao { x: 1030px; y: 12px; width: 220px; height: 64px; fonte: 26px; texto: "⚙ Configurar";
+            clicado => { root.abrir("config"); } }
     if !root.configurado: Text { y: 300px; width: 1280px; text: "sem /etc/revive/navidrome.conf";
                                  font-size: 26px; color: Cores.ruim; horizontal-alignment: center; }
     property <[{nome: string, chave: string}]> opcoes: root.tem-tocando ? [
@@ -416,6 +418,36 @@ component TelaTocando inherits Rectangle {
             clicado => { root.ir("musica"); } }
 }
 
+// ------------------------------------------------- configuração do Navidrome
+
+component TelaConfMusica inherits Rectangle {
+    in property <string> url;
+    in property <string> usuario;
+    in property <string> senha;
+    in property <string> mensagem;
+    callback campo(string);
+    callback salvar();
+    callback voltar();
+    Titulo { text: "Navidrome"; }
+    property <[{rotulo: string, chave: string, valor: string}]> campos: [
+        {rotulo: "Endereços (URL; vários separados por espaço: casa e fora)", chave: "url", valor: root.url},
+        {rotulo: "Usuário", chave: "usuário", valor: root.usuario},
+        {rotulo: "Senha", chave: "senha", valor: root.senha},
+    ];
+    for c[i] in root.campos: Rectangle {
+        x: 30px; y: 100px + i * 130px; width: 1220px; height: 110px; border-radius: 18px;
+        background: toque.pressed ? Cores.cartao.brighter(40%) : Cores.cartao;
+        Text { x: 25px; y: 14px; text: c.rotulo; font-size: 26px; color: Cores.apagado; }
+        Text { x: 25px; y: 52px; width: 1170px; text: c.valor == "" ? "toque para digitar" : c.valor;
+               font-size: 34px; color: c.valor == "" ? Cores.apagado : Cores.texto; overflow: elide; }
+        toque := TouchArea { clicked => { root.campo(c.chave); } }
+    }
+    if root.mensagem != "": Text { y: 505px; width: 1280px; text: root.mensagem; font-size: 34px;
+                                   color: Cores.apagado; horizontal-alignment: center; }
+    Rodape { width: parent.width; direita: "Testar e salvar"; clicou-esquerda => { root.voltar(); }
+             clicou-direita => { root.salvar(); } }
+}
+
 // ------------------------------------------------------------------- cripto
 
 export struct Moeda { id: string, simbolo: string, nome: string, preco: string, variacao: string,
@@ -539,6 +571,12 @@ export component AppWindow inherits Window {
     in property <string> cripto-mensagem;
     in property <string> cripto-moeda;
     callback cripto-trocar-moeda();
+    in property <string> conf-url;
+    in property <string> conf-usuario;
+    in property <string> conf-senha;
+    in property <string> conf-mensagem;
+    callback conf-campo(string);
+    callback conf-salvar();
     in property <string> grafico-titulo;
     in property <string> grafico-info;
     in property <string> grafico-maximo;
@@ -630,6 +668,13 @@ export component AppWindow inherits Window {
             hora: root.hora; data: root.data; wifi-ssid: root.wifi-ssid; wifi-ok: root.wifi-ok;
             bt-conectados: root.bt-conectados; tocando: root.tocando; apps: root.apps;
             abrir(id) => { root.ir(id); }
+        }
+        if root.tela == "musica-conf": TelaConfMusica {
+            width: 1280px; height: 720px; url: root.conf-url; usuario: root.conf-usuario;
+            senha: root.conf-senha; mensagem: root.conf-mensagem;
+            campo(c) => { root.conf-campo(c); }
+            salvar => { root.conf-salvar(); }
+            voltar => { root.ir("musica"); }
         }
         if root.tela == "cripto": TelaCripto {
             width: 1280px; height: 720px; moedas: root.moedas; mensagem: root.cripto-mensagem;

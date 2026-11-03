@@ -4,7 +4,7 @@
 //! outras threads e voltam por `upgrade_in_event_loop`.
 
 use std::cell::RefCell;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -59,6 +59,8 @@ struct Lista {
 enum Modo {
     Senha(String),
     Busca,
+    /// campo da configuração do Navidrome: "url", "usuário" ou "senha"
+    Campo(String),
 }
 
 struct Estado {
@@ -76,6 +78,9 @@ struct Estado {
     scrobbled: String,
     capa: String,
     bt_ultimo: String,
+    conf_url: String,
+    conf_user: String,
+    conf_pass: String,
 }
 
 thread_local! {
@@ -96,12 +101,21 @@ thread_local! {
         scrobbled: String::new(),
         capa: String::new(),
         bt_ultimo: String::new(),
+        conf_url: String::new(),
+        conf_user: String::new(),
+        conf_pass: String::new(),
     });
 }
 
-fn api() -> &'static Subsonic {
-    static API: OnceLock<Subsonic> = OnceLock::new();
-    API.get_or_init(Subsonic::novo)
+/// Cliente do Navidrome; trocado quando a tela de configuração salva dados novos.
+fn api() -> Arc<Subsonic> {
+    API.get_or_init(|| RwLock::new(Arc::new(Subsonic::novo()))).read().unwrap().clone()
+}
+static API: OnceLock<RwLock<Arc<Subsonic>>> = OnceLock::new();
+
+fn trocar_api(nova: Subsonic) {
+    let _ = api();
+    *API.get().unwrap().write().unwrap() = Arc::new(nova);
 }
 
 fn ss(s: impl Into<SharedString>) -> SharedString {
@@ -171,7 +185,7 @@ where
     mostrar_lista(ui);
     let fraca = ui.as_weak();
     std::thread::spawn(move || {
-        let r = carregar(api());
+        let r = carregar(&api());
         let _ = fraca.upgrade_in_event_loop(move |ui| {
             let atual = EST.with_borrow_mut(|e| {
                 if e.geracao != geracao {
@@ -356,14 +370,19 @@ fn teclas(shift: bool, sym: bool, confirmar: &str) -> Vec<Tecla> {
 
 fn atualizar_teclado(ui: &AppWindow) {
     EST.with_borrow(|e| {
-        let senha = matches!(e.modo, Modo::Senha(_));
-        let confirmar = if senha { "Conectar" } else { "Buscar" };
+        let senha = matches!(&e.modo, Modo::Senha(_)) || matches!(&e.modo, Modo::Campo(c) if c == "senha");
+        let confirmar = match &e.modo {
+            Modo::Senha(_) => "Conectar",
+            Modo::Busca => "Buscar",
+            Modo::Campo(_) => "OK",
+        };
         let mostrado = if senha && e.ocultar { "•".repeat(e.texto.chars().count()) } else { e.texto.clone() };
         let ini = mostrado.chars().count().saturating_sub(30);
         ui.set_teclado_texto(ss(mostrado.chars().skip(ini).collect::<String>()));
         ui.set_teclado_vazio(ss(match &e.modo {
             Modo::Senha(s) => format!("senha de {}", curto(s, 18)),
             Modo::Busca => "buscar música".into(),
+            Modo::Campo(c) => format!("{c} do Navidrome"),
         }));
         ui.set_teclado_senha(senha);
         ui.set_teclado_ocultar(e.ocultar);
@@ -385,21 +404,39 @@ fn abrir_teclado(ui: &AppWindow, modo: Modo) {
 }
 
 fn confirmar(ui: &AppWindow) {
-    let (modo_senha, texto) = EST.with_borrow(|e| {
-        (match &e.modo { Modo::Senha(s) => Some(s.clone()), Modo::Busca => None }, e.texto.clone())
+    let (modo, texto) = EST.with_borrow(|e| {
+        let m = match &e.modo {
+            Modo::Senha(s) => Modo::Senha(s.clone()),
+            Modo::Busca => Modo::Busca,
+            Modo::Campo(c) => Modo::Campo(c.clone()),
+        };
+        (m, e.texto.clone())
     });
-    match modo_senha {
-        Some(ssid) => conectar_wifi(ui, ssid, texto),
-        None => buscar(ui, texto.trim().to_string()),
+    match modo {
+        Modo::Senha(ssid) => conectar_wifi(ui, ssid, texto),
+        Modo::Busca => buscar(ui, texto.trim().to_string()),
+        Modo::Campo(c) => {
+            let v = texto.trim().to_string();
+            EST.with_borrow_mut(|e| match c.as_str() {
+                "url" => e.conf_url = v,
+                "usuário" => e.conf_user = v,
+                _ => e.conf_pass = v,
+            });
+            ui.set_tela(ss("musica-conf"));
+            atualizar_conf(ui);
+        }
     }
 }
 
 fn cancelar_teclado(ui: &AppWindow) {
-    let senha = EST.with_borrow(|e| matches!(e.modo, Modo::Senha(_)));
-    if senha {
-        ir(ui, "wifi");
-    } else {
-        ui.set_tela(ss("musica"));
+    match EST.with_borrow(|e| match &e.modo {
+        Modo::Senha(_) => 0,
+        Modo::Busca => 1,
+        Modo::Campo(_) => 2,
+    }) {
+        0 => ir(ui, "wifi"),
+        1 => ui.set_tela(ss("musica")),
+        _ => ui.set_tela(ss("musica-conf")),
     }
 }
 
@@ -420,7 +457,7 @@ fn tecla(ui: &AppWindow, t: &str) {
         "⌫" => EST.with_borrow_mut(|e| {
             e.texto.pop();
         }),
-        "Conectar" | "Buscar" => return confirmar(ui),
+        "Conectar" | "Buscar" | "OK" => return confirmar(ui),
         letra => EST.with_borrow_mut(|e| {
             e.texto.push_str(letra);
             e.shift = false;
@@ -464,6 +501,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     if tela == "cripto" {
         carregar_cripto(ui);
     }
+    if tela == "musica-conf" {
+        abrir_conf(ui);
+    }
     ui.set_tela(ss(tela));
     match tela {
         "wifi" => procurar_redes(ui),
@@ -474,6 +514,61 @@ fn ir(ui: &AppWindow, tela: &str) {
         }
         _ => {}
     }
+}
+
+// ------------------------------------------------- configuração do Navidrome
+
+fn abrir_conf(ui: &AppWindow) {
+    let (url, user, pass) = api().dados();
+    EST.with_borrow_mut(|e| {
+        e.conf_url = url;
+        e.conf_user = user;
+        e.conf_pass = pass;
+    });
+    ui.set_conf_mensagem(ss(""));
+    atualizar_conf(ui);
+}
+
+fn atualizar_conf(ui: &AppWindow) {
+    EST.with_borrow(|e| {
+        ui.set_conf_url(ss(curto(&e.conf_url, 60)));
+        ui.set_conf_usuario(ss(e.conf_user.clone()));
+        ui.set_conf_senha(ss("•".repeat(e.conf_pass.chars().count())));
+    });
+}
+
+fn editar_campo(ui: &AppWindow, campo: String) {
+    let atual = EST.with_borrow(|e| match campo.as_str() {
+        "url" => e.conf_url.clone(),
+        "usuário" => e.conf_user.clone(),
+        _ => e.conf_pass.clone(),
+    });
+    abrir_teclado(ui, Modo::Campo(campo));
+    EST.with_borrow_mut(|e| e.texto = atual);
+    atualizar_teclado(ui);
+}
+
+/// Testa o login com os dados digitados e, se der certo, salva e passa a usá-los.
+fn salvar_conf(ui: &AppWindow) {
+    let (url, user, pass) = EST.with_borrow(|e| (e.conf_url.clone(), e.conf_user.clone(), e.conf_pass.clone()));
+    if url.is_empty() || user.is_empty() {
+        ui.set_conf_mensagem(ss("preencha a URL e o usuário"));
+        return;
+    }
+    ui.set_conf_mensagem(ss("testando..."));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let novo = Subsonic::com(&url, &user, &pass);
+        let r = novo.testar().and_then(|_| novo.salvar()).map(|_| novo);
+        let _ = fraca.upgrade_in_event_loop(move |ui| match r {
+            Ok(novo) => {
+                trocar_api(novo);
+                ui.set_musica_configurada(true);
+                ui.set_conf_mensagem(ss("conectado e salvo ✓"));
+            }
+            Err(e) => ui.set_conf_mensagem(ss(format!("não conectou: {}", curto(&e, 40)))),
+        });
+    });
 }
 
 // ------------------------------------------------------------------- cripto
@@ -691,6 +786,7 @@ fn musica_abrir(ui: &AppWindow, chave: &str) {
                 .collect())
         }),
         "buscar" => abrir_teclado(ui, Modo::Busca),
+        "config" => ir(ui, "musica-conf"),
         _ => {}
     }
 }
@@ -846,6 +942,10 @@ pub fn ligar(ui: &AppWindow) {
             abrir_grafico(&ui, id.to_string(), nome.to_string());
         }
     });
+    let f = ui.as_weak();
+    ui.on_conf_campo(move |c| f.upgrade().iter().for_each(|ui| editar_campo(ui, c.to_string())));
+    let f = ui.as_weak();
+    ui.on_conf_salvar(move || f.upgrade().iter().for_each(salvar_conf));
     let f = ui.as_weak();
     ui.on_cripto_atualizar(move || f.upgrade().iter().for_each(carregar_cripto));
     let f = ui.as_weak();
