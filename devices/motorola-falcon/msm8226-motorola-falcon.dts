@@ -361,6 +361,9 @@
 };
 
 &sdhc_1 {
+	/* Sem HS200/SDR104/DDR50: a sintonia (tuning) do HS200 falhava e o eMMC dava erro de
+	 * gravação até o ext4 ficar somente leitura. Em HS (52 MHz) não há sintonia. */
+	sdhci-caps-mask = <0x7 0x0>;
 	vmmc-supply = <&pm8226_l17>;
 	vqmmc-supply = <&pm8226_l6>;
 
