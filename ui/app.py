@@ -10,6 +10,7 @@ O Wi-Fi é controlado por um wpa_supplicant próprio (wpa_cli, ctrl_interface
 /run/revive-wpa) em vez do NetworkManager, porque alguns chips antigos precisam
 de opções que o NetworkManager não expõe (ex.: WCN36xx sem 802.11n).
 """
+import ctypes
 import fcntl
 import json
 import mmap
@@ -36,6 +37,7 @@ except ImportError:  # sem touch: a interface só mostra informações
     evdev = None
 
 FB = "/dev/fb0"
+BLIT_LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "libreviveblit.so")
 WPA_CTRL = "/run/revive-wpa"
 IFACE = "wlan0"
 FONT = "/usr/share/fonts/dejavu/DejaVuSans.ttf"
@@ -83,15 +85,64 @@ class Framebuffer:
         self.rot = 270  # 90 = topo da interface no lado direito do aparelho; 270 = no esquerdo
         self.bpp = int(open(f"{sysfs}/bits_per_pixel").read())
         self.stride = int(open(f"{sysfs}/stride").read())
+        self.sysfs = sysfs
+        self.driver = self._driver()  # ex.: simple-framebuffer no boot, msmdrmfb depois
+        self.blit = None
+        self.canvas = None
         self.fd = os.open(path, os.O_RDWR)
         self.mem = mmap.mmap(self.fd, self.stride * self.ph)
         log(f"fb {self.pw}x{self.ph} bpp={self.bpp} stride={self.stride} (paisagem {self.w}x{self.h})")
+        try:  # cópia para a tela em C (ui/blit): ~25 ms a tela cheia em vez de ~95 ms
+            lib = ctypes.CDLL(BLIT_LIB)
+            lib.revive_blit.restype = None
+            lib.revive_blit.argtypes = [ctypes.c_char_p] + [ctypes.c_int] * 7 + \
+                [ctypes.c_void_p] + [ctypes.c_int] * 3
+            self.dst = ctypes.addressof((ctypes.c_uint8 * (self.stride * self.ph)).from_buffer(self.mem))
+            self.blit = lib.revive_blit
+        except (OSError, AttributeError) as e:
+            log(f"blit em C indisponível ({e}): usando Pillow")
         # tira o console de texto (fbcon) da tela: terminal em modo gráfico
         try:
             self.tty = os.open("/dev/tty1", os.O_RDWR)
             fcntl.ioctl(self.tty, 0x4B3A, 1)  # KDSETMODE, KD_GRAPHICS
         except OSError as e:
             log(f"tty1 modo gráfico: {e}")
+
+    def _driver(self):
+        try:
+            return open(f"{self.sysfs}/name").read().strip()
+        except OSError:
+            return None
+
+    def trocou(self):
+        """O driver de vídeo de verdade (DRM) assume a tela no lugar do framebuffer do
+        bootloader e cria outro /dev/fb0: o mmap antigo deixa de aparecer na tela."""
+        return self._driver() != self.driver
+
+    def nova_tela(self):
+        """Imagem RGBA reaproveitada a cada desenho; o Pillow desenha direto na memória
+        que o blit em C lê (sem Image.new nem tobytes por quadro)."""
+        self.cbuf = bytearray(self.w * self.h * 4)
+        img = Image.frombuffer("RGBA", (self.w, self.h), self.cbuf, "raw", "RGBA", 0, 1)
+        img.readonly = 0  # desenhar na própria memória, sem cópia
+        self.canvas = img
+        self.caddr = ctypes.addressof((ctypes.c_uint8 * len(self.cbuf)).from_buffer(self.cbuf))
+        return img
+
+    def _blit(self, src, sw, sh, stride, x0, y0):
+        self.blit(src, sw, sh, stride, x0, y0, self.w, self.h, self.dst, self.stride, self.bpp, self.rot)
+
+    def atualizar(self, box):
+        """Copia para a tela só um retângulo da tela de desenho."""
+        x0, y0, x1, y1 = (max(0, int(box[0])), max(0, int(box[1])),
+                          min(self.w, int(box[2])), min(self.h, int(box[3])))
+        if x1 <= x0 or y1 <= y0:
+            return
+        if self.blit:
+            off = (y0 * self.w + x0) * 4
+            self._blit(ctypes.c_char_p(self.caddr + off), x1 - x0, y1 - y0, self.w * 4, x0, y0)
+        else:
+            self.patch(self.canvas.crop((x0, y0, x1, y1)), x0, y0)
 
     def girar(self, img):
         return img.transpose(Image.Transpose.ROTATE_90 if self.rot == 90 else Image.Transpose.ROTATE_270)
@@ -103,6 +154,9 @@ class Framebuffer:
         return py, self.h - 1 - px
 
     def show(self, img):
+        if self.blit and img is self.canvas:
+            self.atualizar((0, 0, self.w, self.h))
+            return
         if img.size != (self.w, self.h):
             img = img.resize((self.w, self.h))
         img = self.girar(img)
@@ -126,6 +180,10 @@ class Framebuffer:
     def patch(self, img, x0, y0):
         """Escreve só um pedaço da tela (cursor do mouse) sem redesenhar tudo.
         x0, y0 e img estão na interface (paisagem)."""
+        if self.blit:
+            raw = img.convert("RGBA").tobytes()
+            self._blit(raw, img.width, img.height, img.width * 4, int(x0), int(y0))
+            return
         w = min(img.width, self.w - x0)
         h = min(img.height, self.h - y0)
         if w <= 0 or h <= 0:
@@ -183,6 +241,8 @@ class Inputs:
         self.caps = False
         self.mx, self.my = width // 2, height // 2
         self.mouse_on = False
+        self.encostou = False  # dedo acabou de encostar: avisa no próximo SYN_REPORT
+        self.atraso = 0.0
         self.scan()
 
     def scan(self):
@@ -241,9 +301,20 @@ class Inputs:
         return self._teclado(events)
 
     def _touch(self, path, events):
+        """Devolve ("down", x, y) quando o dedo encosta (para acender o botão na hora)
+        e ("tap", x, y) quando sai (para executar a ação, como no Android)."""
         max_x, max_y = self.meta[path]
         taps = []
         for ev in events:
+            if ev.type == ecodes.EV_SYN and ev.code == ecodes.SYN_REPORT and self.encostou:
+                self.encostou = False
+                taps.append(("down", *self.conv(self.x, self.y)))
+                self.atraso = time.time() - ev.timestamp()  # hardware -> interface
+                continue
+            if ev.type == ecodes.EV_ABS and ev.code == ecodes.ABS_MT_TRACKING_ID and ev.value >= 0:
+                self.encostou = True
+            elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_TOUCH and ev.value == 1:
+                self.encostou = True
             if ev.code == ecodes.ABS_MT_POSITION_X and ev.type == ecodes.EV_ABS:
                 self.x = ev.value * self.fw // max(max_x, 1)
             elif ev.code == ecodes.ABS_MT_POSITION_Y and ev.type == ecodes.EV_ABS:
@@ -450,6 +521,9 @@ class App:
     def __init__(self):
         self.fb = Framebuffer()
         self.W, self.H = self.fb.w, self.fb.h
+        self.canvas = self.fb.nova_tela()
+        self.cache_btn = {}
+        self.cache_txt = {}
         self.inp = Inputs(self.W, self.H, (self.fb.pw, self.fb.ph), self.fb.to_log)
         self.fb.rot = ler_rotacao()
         self.acel = None  # sysfs do acelerômetro (procurado de tempos em tempos)
@@ -483,23 +557,57 @@ class App:
         self.barra_geo = None
         self.progresso = False  # o status mudou só o tempo da faixa: atualiza só a barra
         self.boost_ate = 0
+        self.aceso = None  # botão aceso pelo toque (o dedo ainda está na tela)
+        self.n_toques = 0
         self.f_big = font(96, True)
+        self.f_relogio = font(110, True)
+        self.f_preco = font(84, True)
         self.f_mid = font(44, True)
         self.f_txt = font(34)
         self.f_small = font(26)
 
     # ---------- desenho
-    def btn(self, d, box, label, action, color=KEY, f=None):
-        d.rounded_rectangle(box, radius=18, fill=color)
+    def btn(self, d, box, label, action, color=KEY, f=None, bg=BG):
+        """Botão arredondado com texto. Cada botão é desenhado uma vez e depois só
+        colado: o texto com antialiasing é o que mais pesa no desenho."""
         f = f or self.f_txt
-        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-        d.text((cx, cy), label, font=f, fill=FG, anchor="mm")
+        x0, y0, x1, y1 = (int(round(v)) for v in box)
+        chave = (x1 - x0, y1 - y0, label, color, id(f), bg)
+        im = self.cache_btn.get(chave)
+        if im is None:  # opaco, com o fundo nos cantos: colar sem máscara é só copiar memória
+            im = Image.new("RGBA", (x1 - x0 + 1, y1 - y0 + 1), bg)
+            dd = ImageDraw.Draw(im)
+            dd.rounded_rectangle((0, 0, x1 - x0, y1 - y0), radius=18, fill=color)
+            if label:
+                dd.text(((x1 - x0) / 2, (y1 - y0) / 2), label, font=f, fill=FG, anchor="mm")
+            if len(self.cache_btn) > 500:
+                self.cache_btn.clear()
+            self.cache_btn[chave] = im
+        self.canvas.paste(im, (x0, y0))
         self.buttons.append(Button(box, label, action, color))
+
+    def txt(self, xy, texto, f, fill=FG, anchor="mm", bg=BG):
+        """Texto grande (relógio, preço) renderizado uma vez por valor e colado opaco."""
+        chave = (texto, id(f), fill, bg)
+        im = self.cache_txt.get(chave)
+        if im is None:
+            x0, y0, x1, y1 = f.getbbox(texto, anchor="lt")
+            im = Image.new("RGBA", (x1 + 2, y1 + 2), bg)
+            ImageDraw.Draw(im).text((0, 0), texto, font=f, fill=fill, anchor="lt")
+            if len(self.cache_txt) > 200:
+                self.cache_txt.clear()
+            self.cache_txt[chave] = im
+        w, h = im.size
+        x, y = xy
+        dx = {"l": 0, "m": w / 2, "r": w}[anchor[0]]
+        dy = {"t": 0, "m": h / 2, "b": h}[anchor[1]]
+        self.canvas.paste(im, (int(x - dx), int(y - dy)))
 
     def draw(self):
         self.buttons = []
-        img = Image.new("RGB", (self.W, self.H), BG)
+        img = self.canvas
         d = ImageDraw.Draw(img)
+        d.rectangle((0, 0, self.W, self.H), fill=BG)
         getattr(self, f"draw_{self.screen}")(d)
         if self.msg:
             d.text((self.W / 2, self.H - 30), self.msg, font=self.f_small, fill=MUTED, anchor="mm")
@@ -541,8 +649,8 @@ class App:
     def draw_home(self, d):
         W, H = self.W, self.H
         L = 620  # coluna esquerda: relógio e bitcoin; direita: Wi-Fi e botões
-        d.text((L / 2 + 15, 75), time.strftime("%H:%M"), font=font(110, True), fill=FG, anchor="mm")
-        d.text((L / 2 + 15, 150), time.strftime("%d/%m/%Y"), font=self.f_txt, fill=MUTED, anchor="mm")
+        self.txt((L / 2 + 15, 75), time.strftime("%H:%M"), self.f_relogio)
+        self.txt((L / 2 + 15, 150), time.strftime("%d/%m/%Y"), self.f_txt, MUTED)
 
         d.rounded_rectangle((30, 195, L, H - 30), radius=28, fill=CARD)
         d.text((60, 235), "Bitcoin", font=self.f_mid, fill=ACCENT, anchor="lm")
@@ -550,8 +658,8 @@ class App:
         if b.brl:
             brl = f"R$ {b.brl:,.0f}".replace(",", ".")
             usd = f"US$ {b.usd:,.0f}".replace(",", ".")
-            d.text((cx, 350), brl, font=font(84, True), fill=FG, anchor="mm")
-            d.text((cx, 440), usd, font=self.f_mid, fill=MUTED, anchor="mm")
+            self.txt((cx, 350), brl, self.f_preco, bg=CARD)
+            self.txt((cx, 440), usd, self.f_mid, MUTED, bg=CARD)
             if b.change is not None:
                 cor = GOOD if b.change >= 0 else BAD
                 d.text((cx, 515), f"{b.change:+.2f}% em 24 h", font=self.f_txt, fill=cor, anchor="mm")
@@ -669,12 +777,12 @@ class App:
             bx = x1 - 85
             if a["pareado"]:
                 self.btn(d, (bx, y + 20, bx + 65, y + 90), "✕",
-                         lambda m=a["mac"]: self.bt_do(f"remove {m}", "esquecido"), f=self.f_txt)
+                         lambda m=a["mac"]: self.bt_do(f"remove {m}", "esquecido"), f=self.f_txt, bg=CARD)
                 bx -= 80
             if a["conectado"] and a["tipo"] == "som":
                 self.btn(d, (bx, y + 20, bx + 65, y + 90), "♪",
                          lambda m=a["mac"]: self.bt_do(f"som {m}", "tocando..."), color=(40, 110, 70),
-                         f=self.f_txt)
+                         f=self.f_txt, bg=CARD)
         if st.get("msg") and not self.msg:
             d.text((W / 2, self.H - 125), st["msg"], font=self.f_small, fill=MUTED, anchor="mm")
         self.rodape(d, ("Voltar", self.go_home),
@@ -1082,6 +1190,8 @@ class App:
             if time.time() - last_scan > 3:  # teclado/mouse Bluetooth conectam a qualquer hora
                 last_scan = time.time()
                 self.inp.scan()
+                if self.fb.trocou():
+                    raise RuntimeError(f"framebuffer trocou ({self.fb.driver} -> {self.fb._driver()})")
             r, _, _ = select.select(self.inp.fds(), [], [], 0.25)
             if r:
                 self.boost()
@@ -1095,11 +1205,22 @@ class App:
                         self.key(acao[1])
                         self.dirty = True
                         continue
-                    _, x, y = acao
+                    tipo, x, y = acao
+                    if tipo == "down":  # dedo encostou: acende o botão já
+                        alvo = next((b for b in reversed(self.buttons) if b.hit(x, y)), None)
+                        if alvo:
+                            self.flash(alvo)
+                            self.aceso = alvo
+                        self.n_toques += 1
+                        if self.n_toques % 20 == 1:
+                            log(f"touch: atraso do evento {self.inp.atraso * 1000:.0f} ms")
+                        continue
                     self.ultimo_x = x
                     for b in reversed(self.buttons):
                         if b.hit(x, y):
-                            self.flash(b)
+                            if b is not self.aceso:
+                                self.flash(b)
+                            self.aceso = None
                             b.action()
                             self.dirty = True
                             break
@@ -1131,7 +1252,7 @@ class App:
         if box[2] <= box[0] or box[3] <= box[1]:
             return
         pedaco = self.frame.crop(box)
-        claro = Image.blend(pedaco, Image.new("RGB", pedaco.size, (255, 255, 255)), 0.3)
+        claro = Image.blend(pedaco, Image.new(pedaco.mode, pedaco.size, (255, 255, 255, 255)), 0.3)
         self.fb.patch(claro, box[0], box[1])
 
     def cpu_min(self, alto):
@@ -1190,7 +1311,7 @@ class App:
         d.text((x0, yb + 32), mmss(st["t"]), font=self.f_small, fill=MUTED, anchor="lm")
         d.text((x1, yb + 32), mmss(st["dur"]), font=self.f_small, fill=MUTED, anchor="rm")
         d.text((cx, yb + 32), f"{st['pos'] + 1} de {st['total']}", font=self.f_small, fill=MUTED, anchor="mm")
-        self.fb.patch(self.frame.crop(caixa), caixa[0], caixa[1])
+        self.fb.atualizar(caixa)
         if self.cur_pos:  # a seta do mouse pode estar em cima da barra
             self.cur_pos = None
             self.cursor()
