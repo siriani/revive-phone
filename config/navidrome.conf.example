@@ -1,0 +1,6 @@
+# Copie para /etc/revive/navidrome.conf (chmod 600). Vários endereços: o primeiro que
+# responder é usado (ex.: rede local em casa, endereço público fora).
+[navidrome]
+urls = http://192.168.0.10:4533 https://music.example.com
+user = seu-usuario
+pass = sua-senha

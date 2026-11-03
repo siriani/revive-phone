@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="mpv em segundo plano para a música do Navidrome (controlado pelo revive-ui)"
+command=/usr/bin/mpv
+command_args="--idle=yes --no-video --no-terminal --ao=alsa --volume=80 --gapless-audio=yes --cache=yes --demuxer-max-bytes=30MiB --input-ipc-server=/run/revive-mpv.sock"
+command_background=true
+pidfile=/run/revive-mpv.pid
+depend() {
+	need localmount
+	after bluealsa revive-bt
+	before revive-ui
+}
