@@ -1,0 +1,38 @@
+From e9c171cc6c477b2014ff17f96099e6b5ac7ab4ae Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:24:38 -0300
+Subject: [PATCH 5/5] ARM: dts: qcom: msm8226: describe the VFE VBIF in the
+ CAMSS node
+
+Add the VFE VBIF region (0xfda40000, 0x200 bytes, "vfe_vbif" of the
+downstream qcom,vfe40 node) so the camss driver can program it as the
+downstream msm_vfe40_init_vbif_parms_8x26() does.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ arch/arm/boot/dts/qcom/qcom-msm8226.dtsi | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+index 9ef65589c..ce68fd22b 100644
+--- a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
++++ b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+@@ -1383,12 +1383,13 @@ camss: camss@fda0ac00 {
+ 			      <0xfda08400 0x100>,	/* csid1 */
+ 			      <0xfda0a000 0x500>,	/* ispif */
+ 			      <0xfda00020 0x10>,	/* csi_clk_mux */
+-			      <0xfda10000 0x1000>;	/* vfe0 */
++			      <0xfda10000 0x1000>,	/* vfe0 */
++			      <0xfda40000 0x200>;	/* vfe0_vbif */
+ 			reg-names = "csiphy0", "csiphy0_clk_mux",
+ 				    "csiphy1", "csiphy1_clk_mux",
+ 				    "csid0", "csid1",
+ 				    "ispif", "csi_clk_mux",
+-				    "vfe0";
++				    "vfe0", "vfe0_vbif";
+ 			interrupts = <GIC_SPI 78 IRQ_TYPE_EDGE_RISING>,
+ 				     <GIC_SPI 79 IRQ_TYPE_EDGE_RISING>,
+ 				     <GIC_SPI 51 IRQ_TYPE_EDGE_RISING>,
+-- 
+2.43.0
+

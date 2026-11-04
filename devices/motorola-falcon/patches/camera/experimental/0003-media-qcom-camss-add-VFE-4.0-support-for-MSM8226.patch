@@ -1,0 +1,332 @@
+From 6f169b004edad51079fb973c6671f11a85883830 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 09:25:41 -0300
+Subject: [PATCH 3/5] media: qcom: camss: add VFE 4.0 support for MSM8226
+
+MSM8226 has the VFE 4.0 (downstream "qcom,vfe40", msm_isp40.c, HW
+version 0x20000013 / 0x20010014). Its register map matches the 4.1 one
+used for MSM8916 (IRQ, bus, write masters, xbar, RDI_CFG, REG_UPDATE at
+0x378), so the 4.1 code is reused, with the differences found by
+comparing msm_isp40.c with camss-vfe-4-1.c register by register:
+
+- QoS: 0xAAAAAAAA for QOS_CFG_0..6 and 0x0002AAAA for QOS_CFG_7 (8x26
+  branch of msm_vfe40_init_qos_parms), instead of 0xAAA5AAA5/0x0001AAA5.
+- BUS_CFG: 0x10000001, as in msm_vfe40_init_hardware_reg(), instead of
+  0x10000009.
+- Clock gating: CGC_OVERRIDE_0 (0x014) = 0x3FFFFFFF and CGC_OVERRIDE_1
+  (0x974) = 0xC001FF7F, also from msm_vfe40_init_hardware_reg().
+- VBIF: msm_vfe40_init_vbif_parms_8x26() programs the VFE VBIF at
+  0xfda40000. It is mapped from an optional "vfe0_vbif" region; without
+  it the VBIF stays at its reset values and a warning is printed.
+- RDI start of frame: the downstream driver never reads the RDI SOF bits
+  of IRQ_STATUS_1 and reports the RDI SOF from the RDIn reg update ack.
+  The 4.0 interrupt handler accepts both.
+
+The VFE HW version is printed when the first stream starts.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ .../media/platform/qcom/camss/camss-vfe-4-1.c | 206 ++++++++++++++++++
+ drivers/media/platform/qcom/camss/camss-vfe.c |  18 ++
+ drivers/media/platform/qcom/camss/camss-vfe.h |   2 +
+ drivers/media/platform/qcom/camss/camss.c     |   4 +-
+ 4 files changed, 228 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+index 901677293..f824d8978 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+@@ -204,6 +204,29 @@
+ #define VFE_0_CGC_OVERRIDE_1			0x974
+ #define VFE_0_CGC_OVERRIDE_1_IMAGE_Mx_CGC_OVERRIDE(x)	BIT(x)
+ 
++/*
++ * VFE 4.0 (MSM8226, HW version 0x2000xxxx). Values from the downstream
++ * msm_isp40.c, msm_vfe40_init_hardware_reg() and the 8x26 branches.
++ */
++#define VFE_0_CGC_OVERRIDE_0			0x014
++#define VFE_0_CGC_OVERRIDE_0_4_0_CFG		0x3fffffff
++#define VFE_0_CGC_OVERRIDE_1_4_0_CFG		0xc001ff7f
++#define VFE_0_BUS_CFG_4_0_CFG			0x10000001
++#define VFE_0_BUS_BDG_QOS_CFG_4_0_CFG		0xaaaaaaaa
++#define VFE_0_BUS_BDG_QOS_CFG_7_4_0_CFG		0x0002aaaa
++
++#define VFE_VBIF_IN_RD_LIM_CONF0		0x0b0
++#define VFE_VBIF_IN_RD_LIM_CONF1		0x0b4
++#define VFE_VBIF_IN_WR_LIM_CONF0		0x0c0
++#define VFE_VBIF_IN_WR_LIM_CONF1		0x0c4
++#define VFE_VBIF_OUT_RD_LIM_CONF0		0x0d0
++#define VFE_VBIF_OUT_WR_LIM_CONF0		0x0d4
++#define VFE_VBIF_DDR_OUT_MAX_BURST		0x0d8
++#define VFE_VBIF_ROUND_ROBIN_QOS_ARB		0x124
++#define VFE_VBIF_OUT_AXI_AMEMTYPE_CONF0		0x160
++#define VFE_VBIF_OUT_AXI_AOOO_EN		0x178
++#define VFE_VBIF_OUT_AXI_AOOO			0x17c
++
+ #define CAMIF_TIMEOUT_SLEEP_US 1000
+ #define CAMIF_TIMEOUT_ALL_US 1000000
+ 
+@@ -984,6 +1007,129 @@ static const struct vfe_hw_ops_gen1 vfe_ops_gen1_4_1 = {
+ 	.wm_set_ub_cfg = vfe_wm_set_ub_cfg,
+ };
+ 
++/*
++ * VFE 4.0 (MSM8226) specific hooks.
++ */
++static void vfe_bus_enable_wr_if_4_0(struct vfe_device *vfe, u8 enable)
++{
++	if (enable)
++		writel_relaxed(VFE_0_BUS_CFG_4_0_CFG, vfe->base + VFE_0_BUS_CFG);
++	else
++		writel_relaxed(0, vfe->base + VFE_0_BUS_CFG);
++}
++
++static void vfe_set_qos_4_0(struct vfe_device *vfe)
++{
++	u32 val = VFE_0_BUS_BDG_QOS_CFG_4_0_CFG;
++
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_0);
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_1);
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_2);
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_3);
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_4);
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_5);
++	writel_relaxed(val, vfe->base + VFE_0_BUS_BDG_QOS_CFG_6);
++	writel_relaxed(VFE_0_BUS_BDG_QOS_CFG_7_4_0_CFG,
++		       vfe->base + VFE_0_BUS_BDG_QOS_CFG_7);
++}
++
++/* msm_vfe40_init_vbif_parms_8x26() */
++static void vfe_set_vbif_4_0(struct vfe_device *vfe)
++{
++	void __iomem *vbif = vfe->base_vbif;
++
++	if (!vbif)
++		return;
++
++	writel_relaxed(0x10101010, vbif + VFE_VBIF_IN_RD_LIM_CONF0);
++	writel_relaxed(0x10101010, vbif + VFE_VBIF_IN_RD_LIM_CONF1);
++	writel_relaxed(0x10101010, vbif + VFE_VBIF_IN_WR_LIM_CONF0);
++	writel_relaxed(0x10101010, vbif + VFE_VBIF_IN_WR_LIM_CONF1);
++	writel_relaxed(0x00000010, vbif + VFE_VBIF_OUT_RD_LIM_CONF0);
++	writel_relaxed(0x00000010, vbif + VFE_VBIF_OUT_WR_LIM_CONF0);
++	writel_relaxed(0x00000707, vbif + VFE_VBIF_DDR_OUT_MAX_BURST);
++	writel_relaxed(0x000000ff, vbif + VFE_VBIF_OUT_AXI_AOOO_EN);
++	writel_relaxed(0x00ff00ff, vbif + VFE_VBIF_OUT_AXI_AOOO);
++	writel_relaxed(0x00000003, vbif + VFE_VBIF_ROUND_ROBIN_QOS_ARB);
++	writel_relaxed(0x22222222, vbif + VFE_VBIF_OUT_AXI_AMEMTYPE_CONF0);
++}
++
++/*
++ * Called once from vfe_gen1_enable() when the first stream starts, right
++ * after the QoS setup: this is where msm_vfe40_init_hardware_reg() programs
++ * the clock gating overrides and the VBIF on the downstream kernel.
++ */
++static void vfe_set_ds_4_0(struct vfe_device *vfe)
++{
++	u32 hw_version = readl_relaxed(vfe->base + VFE_0_HW_VERSION);
++
++	dev_info(vfe->camss->dev, "VFE%d: HW version 0x%08x, VBIF %s\n",
++		 vfe->id, hw_version, vfe->base_vbif ? "on" : "not described");
++
++	writel_relaxed(VFE_0_CGC_OVERRIDE_0_4_0_CFG,
++		       vfe->base + VFE_0_CGC_OVERRIDE_0);
++	writel_relaxed(VFE_0_CGC_OVERRIDE_1_4_0_CFG,
++		       vfe->base + VFE_0_CGC_OVERRIDE_1);
++	vfe_set_vbif_4_0(vfe);
++	wmb();
++}
++
++/*
++ * vfe_isr_4_0 - VFE 4.0 interrupt handler
++ *
++ * Same as vfe_isr(), except for the RDI start of frame: the downstream
++ * msm_isp40.c never uses the IRQ_STATUS_1 RDI SOF bits and reports the RDI
++ * SOF from the RDIn reg update ack instead (msm_vfe40_process_reg_update).
++ * Accept both, so the stream-off wait does not depend on bits that may not
++ * exist on this VFE revision.
++ */
++static irqreturn_t vfe_isr_4_0(int irq, void *dev)
++{
++	struct vfe_device *vfe = dev;
++	u32 value0, value1;
++	int i, j;
++
++	vfe->res->hw_ops->isr_read(vfe, &value0, &value1);
++
++	dev_dbg(vfe->camss->dev, "VFE: status0 = 0x%08x, status1 = 0x%08x\n",
++		value0, value1);
++
++	if (value0 & VFE_0_IRQ_STATUS_0_RESET_ACK)
++		vfe->isr_ops.reset_ack(vfe);
++
++	if (value1 & VFE_0_IRQ_STATUS_1_VIOLATION)
++		vfe->res->hw_ops->violation_read(vfe);
++
++	if (value1 & VFE_0_IRQ_STATUS_1_BUS_BDG_HALT_ACK)
++		vfe->isr_ops.halt_ack(vfe);
++
++	for (i = VFE_LINE_RDI0; i <= VFE_LINE_PIX; i++)
++		if (value0 & VFE_0_IRQ_STATUS_0_line_n_REG_UPDATE(i))
++			vfe->isr_ops.reg_update(vfe, i);
++
++	if (value0 & VFE_0_IRQ_STATUS_0_CAMIF_SOF)
++		vfe->isr_ops.sof(vfe, VFE_LINE_PIX);
++
++	for (i = VFE_LINE_RDI0; i <= VFE_LINE_RDI2; i++)
++		if ((value1 & VFE_0_IRQ_STATUS_1_RDIn_SOF(i)) ||
++		    (value0 & VFE_0_IRQ_STATUS_0_RDIn_REG_UPDATE(i)))
++			vfe->isr_ops.sof(vfe, i);
++
++	for (i = 0; i < MSM_VFE_COMPOSITE_IRQ_NUM; i++)
++		if (value0 & VFE_0_IRQ_STATUS_0_IMAGE_COMPOSITE_DONE_n(i)) {
++			vfe->isr_ops.comp_done(vfe, i);
++			for (j = 0; j < ARRAY_SIZE(vfe->wm_output_map); j++)
++				if (vfe->wm_output_map[j] == VFE_LINE_PIX)
++					value0 &= ~VFE_0_IRQ_MASK_0_IMAGE_MASTER_n_PING_PONG(j);
++		}
++
++	for (i = 0; i < MSM_VFE_IMAGE_MASTERS_NUM; i++)
++		if (value0 & VFE_0_IRQ_STATUS_0_IMAGE_MASTER_n_PING_PONG(i))
++			vfe->isr_ops.wm_done(vfe, i);
++
++	return IRQ_HANDLED;
++}
++
+ static void vfe_subdev_init(struct device *dev, struct vfe_device *vfe)
+ {
+ 	vfe->isr_ops = vfe_isr_ops_gen1;
+@@ -1006,3 +1152,63 @@ const struct vfe_hw_ops vfe_ops_4_1 = {
+ 	.vfe_halt = vfe_gen1_halt,
+ 	.violation_read = vfe_violation_read,
+ };
++
++static const struct vfe_hw_ops_gen1 vfe_ops_gen1_4_0 = {
++	.bus_connect_wm_to_rdi = vfe_bus_connect_wm_to_rdi,
++	.bus_disconnect_wm_from_rdi = vfe_bus_disconnect_wm_from_rdi,
++	.bus_enable_wr_if = vfe_bus_enable_wr_if_4_0,
++	.bus_reload_wm = vfe_bus_reload_wm,
++	.camif_wait_for_stop = vfe_camif_wait_for_stop,
++	.enable_irq_common = vfe_enable_irq_common,
++	.enable_irq_pix_line = vfe_enable_irq_pix_line,
++	.enable_irq_wm_line = vfe_enable_irq_wm_line,
++	.get_ub_size = vfe_get_ub_size,
++	.halt_clear = vfe_halt_clear,
++	.halt_request = vfe_halt_request,
++	.set_camif_cfg = vfe_set_camif_cfg,
++	.set_camif_cmd = vfe_set_camif_cmd,
++	.set_cgc_override = vfe_set_cgc_override,
++	.set_clamp_cfg = vfe_set_clamp_cfg,
++	.set_crop_cfg = vfe_set_crop_cfg,
++	.set_demux_cfg = vfe_set_demux_cfg,
++	.set_ds = vfe_set_ds_4_0,
++	.set_module_cfg = vfe_set_module_cfg,
++	.set_qos = vfe_set_qos_4_0,
++	.set_rdi_cid = vfe_set_rdi_cid,
++	.set_realign_cfg = vfe_set_realign_cfg,
++	.set_scale_cfg = vfe_set_scale_cfg,
++	.set_xbar_cfg = vfe_set_xbar_cfg,
++	.wm_enable = vfe_wm_enable,
++	.wm_frame_based = vfe_wm_frame_based,
++	.wm_get_ping_pong_status = vfe_wm_get_ping_pong_status,
++	.wm_line_based = vfe_wm_line_based,
++	.wm_set_framedrop_pattern = vfe_wm_set_framedrop_pattern,
++	.wm_set_framedrop_period = vfe_wm_set_framedrop_period,
++	.wm_set_ping_addr = vfe_wm_set_ping_addr,
++	.wm_set_pong_addr = vfe_wm_set_pong_addr,
++	.wm_set_subsample = vfe_wm_set_subsample,
++	.wm_set_ub_cfg = vfe_wm_set_ub_cfg,
++};
++
++static void vfe_subdev_init_4_0(struct device *dev, struct vfe_device *vfe)
++{
++	vfe->isr_ops = vfe_isr_ops_gen1;
++	vfe->ops_gen1 = &vfe_ops_gen1_4_0;
++	vfe->video_ops = vfe_video_ops_gen1;
++}
++
++const struct vfe_hw_ops vfe_ops_4_0 = {
++	.global_reset = vfe_global_reset,
++	.hw_version = vfe_hw_version,
++	.isr_read = vfe_isr_read,
++	.isr = vfe_isr_4_0,
++	.pm_domain_off = vfe_4_1_pm_domain_off,
++	.pm_domain_on = vfe_4_1_pm_domain_on,
++	.reg_update_clear = vfe_reg_update_clear,
++	.reg_update = vfe_reg_update,
++	.subdev_init = vfe_subdev_init_4_0,
++	.vfe_disable = vfe_gen1_disable,
++	.vfe_enable = vfe_gen1_enable,
++	.vfe_halt = vfe_gen1_halt,
++	.violation_read = vfe_violation_read,
++};
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe.c b/drivers/media/platform/qcom/camss/camss-vfe.c
+index 4c327530b..6e7209672 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe.c
+@@ -1808,6 +1808,24 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
+ 		return PTR_ERR(vfe->base);
+ 	}
+ 
++	/*
++	 * Optional second region: the VBIF of the VFE (MSM8226). It is only
++	 * programmed when the device tree describes it.
++	 */
++	vfe->base_vbif = NULL;
++	if (res->reg[1] &&
++	    platform_get_resource_byname(pdev, IORESOURCE_MEM, res->reg[1])) {
++		vfe->base_vbif = devm_platform_ioremap_resource_byname(pdev,
++								       res->reg[1]);
++		if (IS_ERR(vfe->base_vbif)) {
++			dev_err(dev, "could not map %s\n", res->reg[1]);
++			return PTR_ERR(vfe->base_vbif);
++		}
++	} else if (res->reg[1]) {
++		dev_warn(dev, "no \"%s\" region in DT, VBIF left at reset values\n",
++			 res->reg[1]);
++	}
++
+ 	/* Interrupt */
+ 
+ 	ret = platform_get_irq_byname(pdev, res->interrupt[0]);
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe.h b/drivers/media/platform/qcom/camss/camss-vfe.h
+index a23f666be..374588f14 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe.h
++++ b/drivers/media/platform/qcom/camss/camss-vfe.h
+@@ -145,6 +145,7 @@ struct vfe_device {
+ 	struct camss *camss;
+ 	u8 id;
+ 	void __iomem *base;
++	void __iomem *base_vbif;
+ 	u32 irq;
+ 	char irq_name[30];
+ 	struct camss_clock *clock;
+@@ -238,6 +239,7 @@ extern const struct camss_formats vfe_formats_pix_8x96;
+ extern const struct camss_formats vfe_formats_rdi_845;
+ extern const struct camss_formats vfe_formats_pix_845;
+ 
++extern const struct vfe_hw_ops vfe_ops_4_0;
+ extern const struct vfe_hw_ops vfe_ops_4_1;
+ extern const struct vfe_hw_ops vfe_ops_4_7;
+ extern const struct vfe_hw_ops vfe_ops_4_8;
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index ae54980e1..b15b06234 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -3833,11 +3833,11 @@ static const struct camss_subdev_resources vfe_res_8x26[] = {
+ 				{ 0 },
+ 				{ 0 },
+ 				{ 0 } },
+-		.reg = { "vfe0" },
++		.reg = { "vfe0", "vfe0_vbif" },
+ 		.interrupt = { "vfe0" },
+ 		.vfe = {
+ 			.line_num = 3,
+-			.hw_ops = &vfe_ops_4_1,
++			.hw_ops = &vfe_ops_4_0,
+ 			.formats_rdi = &vfe_formats_rdi_8x16,
+ 			.formats_pix = &vfe_formats_pix_8x16
+ 		}
+-- 
+2.43.0
+

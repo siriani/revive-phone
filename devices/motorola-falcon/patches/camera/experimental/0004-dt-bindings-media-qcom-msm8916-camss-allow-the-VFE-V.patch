@@ -1,0 +1,59 @@
+From 9f90ebcd7182e1606d9fa5af622095927fb42277 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:21:27 -0300
+Subject: [PATCH 4/5] dt-bindings: media: qcom,msm8916-camss: allow the VFE
+ VBIF region on MSM8226
+
+The MSM8226 VFE (VFE 4.0) needs its VBIF programmed, as the downstream
+msm_vfe40_init_vbif_parms_8x26() does. Allow an optional tenth register
+region, vfe0_vbif, and keep MSM8916 at nine regions.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ .../bindings/media/qcom,msm8916-camss.yaml       | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/devicetree/bindings/media/qcom,msm8916-camss.yaml b/Documentation/devicetree/bindings/media/qcom,msm8916-camss.yaml
+index 738fcf5f0..55688f4ae 100644
+--- a/Documentation/devicetree/bindings/media/qcom,msm8916-camss.yaml
++++ b/Documentation/devicetree/bindings/media/qcom,msm8916-camss.yaml
+@@ -127,9 +127,10 @@ properties:
+ 
+   reg:
+     minItems: 9
+-    maxItems: 9
++    maxItems: 10
+ 
+   reg-names:
++    minItems: 9
+     items:
+       - const: csiphy0
+       - const: csiphy0_clk_mux
+@@ -140,11 +141,24 @@ properties:
+       - const: ispif
+       - const: csi_clk_mux
+       - const: vfe0
++      - const: vfe0_vbif
+ 
+   vdda-supply:
+     description:
+       Definition of the regulator used as analog power supply.
+ 
++allOf:
++  - if:
++      properties:
++        compatible:
++          const: qcom,msm8916-camss
++    then:
++      properties:
++        reg:
++          maxItems: 9
++        reg-names:
++          maxItems: 9
++
+ required:
+   - clock-names
+   - clocks
+-- 
+2.43.0
+

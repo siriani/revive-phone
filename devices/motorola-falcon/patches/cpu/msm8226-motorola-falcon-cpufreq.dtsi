@@ -1,0 +1,64 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * falcon (MSM8226, speed bin 0): escalonamento de tensão da CPU sem CPR.
+ *
+ * Linha APC = FTS2 "S2" do PM8226 (USID 1, periférico 0x1700), a mesma que o
+ * downstream usa como vdd-apc do cpr-regulator (spm-regulator "8226_s2").
+ * Tensões FIXAS = tetos do CPR downstream (nunca abaixo do que ele aplicaria):
+ *   SVS  (300, 384 MHz)            1,140 V  (piso = teto do CPR)
+ *   NOM  (600, 787,2 MHz)          1,150 V  (teto do CPR)
+ *   TURBO(998,4/1094,4/1190,4 MHz) FALCON_APC_TURBO_UV, padrão 1,275 V
+ *       (teto da faixa 0 do FTS2; o teto do CPR é max(1,28 V, PVS turbo)).
+ * O regulador é o fts2-apc-regulator.ko (não troca a faixa do FTS2); o
+ * cpufreq-dt adia até o módulo ser carregado.
+ * MX (L3) >= APC: vdd-mx-vmin-method = 1 no downstream.
+ */
+
+#ifndef FALCON_APC_TURBO_UV
+#define FALCON_APC_TURBO_UV 1275000
+#endif
+
+&cpu0 { cpu-supply = <&pm8226_apc>; };
+&cpu1 { cpu-supply = <&pm8226_apc>; };
+&cpu2 { cpu-supply = <&pm8226_apc>; };
+&cpu3 { cpu-supply = <&pm8226_apc>; };
+
+&cpu_opp_table {
+	opp-300000000 { opp-microvolt = <1140000 1140000 1140000>; };
+	opp-384000000 { opp-microvolt = <1140000 1140000 1140000>; };
+	opp-600000000 { opp-microvolt = <1150000 1150000 1150000>; };
+	opp-787200000 { opp-microvolt = <1150000 1150000 1150000>; };
+
+	opp-998400000 {
+		opp-hz = /bits/ 64 <998400000>;
+		opp-microvolt = <FALCON_APC_TURBO_UV FALCON_APC_TURBO_UV (FALCON_APC_TURBO_UV + 5000)>;
+	};
+
+#ifndef FALCON_CPU_MAX_998
+	opp-1094400000 {
+		opp-hz = /bits/ 64 <1094400000>;
+		opp-microvolt = <FALCON_APC_TURBO_UV FALCON_APC_TURBO_UV (FALCON_APC_TURBO_UV + 5000)>;
+	};
+
+	opp-1190400000 {
+		opp-hz = /bits/ 64 <1190400000>;
+		opp-microvolt = <FALCON_APC_TURBO_UV FALCON_APC_TURBO_UV (FALCON_APC_TURBO_UV + 5000)>;
+	};
+#endif
+};
+
+&pm8226_1 {
+	pm8226_apc: apc-regulator@1700 {
+		compatible = "revive,pm8226-fts2-apc";
+		reg = <0x1700>;
+		regulator-name = "vdd_apc";
+		regulator-min-microvolt = <1140000>;
+		regulator-max-microvolt = <(FALCON_APC_TURBO_UV + 5000)>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&pm8226_l3 {
+	regulator-min-microvolt = <1287500>;
+};

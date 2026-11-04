@@ -1,0 +1,290 @@
+From 19a1214de24ba37b6ef63fc5201f4b4d61a65f4a Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:43:33 -0300
+Subject: [PATCH] regulator: add an MSM8226 APC (CPU) rail driver for the
+ PM8226 FTS2 S2
+
+Experimental, not yet tested on hardware.
+
+Write only the voltage set point (VSET, 0x41) and keep the range the
+bootloader programmed, like the downstream spm-regulator. The
+qcom_spmi-regulator driver cannot describe range 1 below 1.28 V and
+switches ranges while the CPU is running (voltage spike). The ramp
+delay is read from STEP_CTRL with the downstream 4/5 margin; no
+enable/disable; an extra floor/ceiling check guards every write.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ drivers/regulator/Kconfig              |   8 +
+ drivers/regulator/Makefile             |   1 +
+ drivers/regulator/fts2-apc-regulator.c | 227 +++++++++++++++++++++++++
+ 3 files changed, 236 insertions(+)
+ create mode 100644 drivers/regulator/fts2-apc-regulator.c
+
+diff --git a/drivers/regulator/Kconfig b/drivers/regulator/Kconfig
+index 6d8988387..c7163785f 100644
+--- a/drivers/regulator/Kconfig
++++ b/drivers/regulator/Kconfig
+@@ -1109,6 +1109,14 @@ config REGULATOR_QCOM_SMD_RPM
+ 	  Qualcomm RPM as a module. The module will be named
+ 	  "qcom_smd-regulator".
+ 
++config REGULATOR_QCOM_FTS2_APC
++	tristate "Qualcomm MSM8226 APC (CPU) rail on PM8226 FTS2 S2"
++	depends on MFD_SPMI_PMIC || COMPILE_TEST
++	help
++	  CPU (APC) supply of MSM8226 on the PM8226 S2 FTS2 buck. Writes only
++	  the voltage set point and keeps the voltage range programmed by the
++	  bootloader (no range switching), like the downstream spm-regulator.
++
+ config REGULATOR_QCOM_SPMI
+ 	tristate "Qualcomm SPMI regulator driver"
+ 	depends on SPMI || COMPILE_TEST
+diff --git a/drivers/regulator/Makefile b/drivers/regulator/Makefile
+index c0bc7a0f4..4611320cc 100644
+--- a/drivers/regulator/Makefile
++++ b/drivers/regulator/Makefile
+@@ -120,6 +120,7 @@ obj-$(CONFIG_REGULATOR_QCOM_REFGEN) += qcom-refgen-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_RPM) += qcom_rpm-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_RPMH) += qcom-rpmh-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_SMD_RPM) += qcom_smd-regulator.o
++obj-$(CONFIG_REGULATOR_QCOM_FTS2_APC) += fts2-apc-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_SPMI) += qcom_spmi-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_USB_VBUS) += qcom_usb_vbus-regulator.o
+ obj-$(CONFIG_REGULATOR_PALMAS) += palmas-regulator.o
+diff --git a/drivers/regulator/fts2-apc-regulator.c b/drivers/regulator/fts2-apc-regulator.c
+new file mode 100644
+index 000000000..66fd25d2a
+--- /dev/null
++++ b/drivers/regulator/fts2-apc-regulator.c
+@@ -0,0 +1,227 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Regulador da linha APC (CPU) do MSM8226 no FTS2 "S2" do PM8226.
++ *
++ * Equivale ao spm-regulator do kernel downstream (msm-3.4) sem o SPM:
++ *  - mantém a FAIXA (range) que o bootloader deixou e escreve SÓ o registro
++ *    de tensão (VSET, 0x41). Nunca troca de faixa: a troca de faixa no FTS2
++ *    gera pico de tensão (o próprio qcom_spmi-regulator avisa disso), e o
++ *    driver mainline não representa a faixa 1 abaixo de 1,28 V.
++ *  - VSET é absoluto: faixa 0 = VSET * 5 mV (0,35-1,275 V),
++ *                     faixa 1 = VSET * 10 mV (0,70-2,04 V).
++ *  - taxa de subida lida do STEP_CTRL (0x61), com a mesma margem do downstream.
++ *  - sem enable/disable: a linha da CPU nunca é desligada por este driver.
++ *  - trava extra (parâmetros piso_uv/teto_uv) além das restrições do DT.
++ */
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/regulator/driver.h>
++#include <linux/regulator/of_regulator.h>
++
++#define FTS2_REG_TYPE		0x04
++#define FTS2_REG_SUBTYPE	0x05
++#define FTS2_REG_RANGE		0x40
++#define FTS2_REG_VSET		0x41
++#define FTS2_REG_MODE		0x45
++#define FTS2_REG_STEP_CTRL	0x61
++
++#define FTS2_TYPE		0x1c
++#define FTS2_SUBTYPE		0x08
++#define FTS2_MODE_PWM		0x80
++#define FTS2_MODE_AUTO		0x40
++#define FTS2_MODE_MASK		(FTS2_MODE_PWM | FTS2_MODE_AUTO)
++
++#define FTS2_CLOCK_KHZ		19200
++#define FTS2_MIN_VSET		70	/* 0,35 V (faixa 0) / 0,70 V (faixa 1) */
++
++static bool pwm_fixo = true;
++module_param(pwm_fixo, bool, 0444);
++MODULE_PARM_DESC(pwm_fixo, "deixa o S2 em PWM (rampa rapida e previsivel), padrao 1");
++
++static int piso_uv = 1100000;
++module_param(piso_uv, int, 0444);
++MODULE_PARM_DESC(piso_uv, "tensao minima aceita, em uV (padrao 1100000)");
++
++static int teto_uv = 1350000;
++module_param(teto_uv, int, 0444);
++MODULE_PARM_DESC(teto_uv, "tensao maxima aceita, em uV (padrao 1350000)");
++
++struct fts2_apc {
++	struct regmap *map;
++	u16 base;
++	unsigned int range;
++	unsigned int mode_orig;
++	bool mode_mudou;
++	struct regulator_desc desc;
++};
++
++static int fts2_range_ok(struct fts2_apc *v)
++{
++	unsigned int r;
++	int ret = regmap_read(v->map, v->base + FTS2_REG_RANGE, &r);
++
++	if (ret)
++		return ret;
++	if (r != v->range)
++		return -EIO;	/* alguem trocou a faixa: nao arrisca */
++	return 0;
++}
++
++static int fts2_get_voltage_sel(struct regulator_dev *rdev)
++{
++	struct fts2_apc *v = rdev_get_drvdata(rdev);
++	unsigned int val;
++	int ret;
++
++	ret = fts2_range_ok(v);
++	if (ret)
++		return ret;
++	ret = regmap_read(v->map, v->base + FTS2_REG_VSET, &val);
++	if (ret)
++		return ret;
++	if (val < FTS2_MIN_VSET || val >= v->desc.n_voltages)
++		return -EINVAL;
++	return val;
++}
++
++static int fts2_set_voltage_sel(struct regulator_dev *rdev, unsigned int sel)
++{
++	struct fts2_apc *v = rdev_get_drvdata(rdev);
++	int uv = regulator_desc_list_voltage_linear(&v->desc, sel);
++	int ret;
++
++	if (uv < piso_uv || uv > teto_uv) {
++		dev_err(&rdev->dev, "recusado: %d uV fora de [%d, %d]\n",
++			uv, piso_uv, teto_uv);
++		return -EINVAL;
++	}
++	ret = fts2_range_ok(v);
++	if (ret)
++		return ret;
++	return regmap_write(v->map, v->base + FTS2_REG_VSET, sel);
++}
++
++static const struct regulator_ops fts2_apc_ops = {
++	.list_voltage	 = regulator_list_voltage_linear,
++	.map_voltage	 = regulator_map_voltage_linear,
++	.get_voltage_sel = fts2_get_voltage_sel,
++	.set_voltage_sel = fts2_set_voltage_sel,
++};
++
++static int fts2_apc_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct device_node *np = dev->of_node;
++	struct regulator_config cfg = { };
++	struct regulator_dev *rdev;
++	struct fts2_apc *v;
++	unsigned int type, subtype, step_ctrl, step_uv, rate;
++	u32 base;
++	int ret;
++
++	v = devm_kzalloc(dev, sizeof(*v), GFP_KERNEL);
++	if (!v)
++		return -ENOMEM;
++
++	v->map = dev_get_regmap(dev->parent, NULL);
++	if (!v->map)
++		return dev_err_probe(dev, -ENODEV, "sem regmap do PMIC\n");
++	if (of_property_read_u32(np, "reg", &base))
++		return dev_err_probe(dev, -EINVAL, "sem reg\n");
++	v->base = base;
++
++	ret = regmap_read(v->map, v->base + FTS2_REG_TYPE, &type);
++	ret = ret ?: regmap_read(v->map, v->base + FTS2_REG_SUBTYPE, &subtype);
++	ret = ret ?: regmap_read(v->map, v->base + FTS2_REG_RANGE, &v->range);
++	ret = ret ?: regmap_read(v->map, v->base + FTS2_REG_STEP_CTRL, &step_ctrl);
++	ret = ret ?: regmap_read(v->map, v->base + FTS2_REG_MODE, &v->mode_orig);
++	if (ret)
++		return dev_err_probe(dev, ret, "leitura do PMIC falhou\n");
++
++	if (type != FTS2_TYPE || subtype != FTS2_SUBTYPE)
++		return dev_err_probe(dev, -ENODEV,
++				     "0x%x nao e FTS2 (tipo 0x%x/0x%x)\n",
++				     base, type, subtype);
++	if (v->range > 1)
++		return dev_err_probe(dev, -EINVAL, "faixa %u invalida\n",
++				     v->range);
++
++	step_uv = v->range ? 10000 : 5000;
++	v->desc.name = "fts2-apc";
++	v->desc.of_match = NULL;
++	v->desc.type = REGULATOR_VOLTAGE;
++	v->desc.owner = THIS_MODULE;
++	v->desc.ops = &fts2_apc_ops;
++	v->desc.uV_step = step_uv;
++	v->desc.linear_min_sel = FTS2_MIN_VSET;
++	v->desc.min_uV = FTS2_MIN_VSET * step_uv;
++	v->desc.n_voltages = v->range ? 205 : 256;	/* 2,04 V / 1,275 V */
++
++	/* mesma conta do spm-regulator downstream (uV/us, margem 4/5) */
++	rate = FTS2_CLOCK_KHZ * step_uv * (1 << ((step_ctrl & 0x18) >> 3));
++	rate /= 1000 * (8 << (step_ctrl & 0x07));
++	rate = rate * 4 / 5;
++	v->desc.ramp_delay = max(rate, 1U);
++
++	cfg.dev = dev;
++	cfg.of_node = np;
++	cfg.driver_data = v;
++	cfg.init_data = of_get_regulator_init_data(dev, np, &v->desc);
++	if (!cfg.init_data)
++		return dev_err_probe(dev, -EINVAL, "sem restricoes no DT\n");
++
++	if (pwm_fixo && (v->mode_orig & FTS2_MODE_MASK) != FTS2_MODE_PWM) {
++		ret = regmap_update_bits(v->map, v->base + FTS2_REG_MODE,
++					 FTS2_MODE_MASK, FTS2_MODE_PWM);
++		if (ret)
++			return dev_err_probe(dev, ret, "modo PWM falhou\n");
++		v->mode_mudou = true;
++		udelay(50);
++	}
++
++	platform_set_drvdata(pdev, v);
++	rdev = devm_regulator_register(dev, &v->desc, &cfg);
++	if (IS_ERR(rdev)) {
++		if (v->mode_mudou)
++			regmap_update_bits(v->map, v->base + FTS2_REG_MODE,
++					   FTS2_MODE_MASK, v->mode_orig);
++		return dev_err_probe(dev, PTR_ERR(rdev), "registro falhou\n");
++	}
++
++	dev_info(dev, "S2 FTS2 @0x%x: faixa %u, passo %u uV, rampa %u uV/us, modo 0x%02x%s\n",
++		 base, v->range, step_uv, v->desc.ramp_delay, v->mode_orig,
++		 v->mode_mudou ? " -> PWM" : "");
++	return 0;
++}
++
++static void fts2_apc_remove(struct platform_device *pdev)
++{
++	struct fts2_apc *v = platform_get_drvdata(pdev);
++
++	if (v && v->mode_mudou)
++		regmap_update_bits(v->map, v->base + FTS2_REG_MODE,
++				   FTS2_MODE_MASK, v->mode_orig);
++}
++
++static const struct of_device_id fts2_apc_of_match[] = {
++	{ .compatible = "revive,pm8226-fts2-apc" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, fts2_apc_of_match);
++
++static struct platform_driver fts2_apc_driver = {
++	.probe = fts2_apc_probe,
++	.remove = fts2_apc_remove,
++	.driver = {
++		.name = "fts2-apc-regulator",
++		.of_match_table = fts2_apc_of_match,
++		.suppress_bind_attrs = true,
++	},
++};
++module_platform_driver(fts2_apc_driver);
++
++MODULE_DESCRIPTION("Linha APC (CPU) do MSM8226 no FTS2 S2 do PM8226, sem troca de faixa");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+

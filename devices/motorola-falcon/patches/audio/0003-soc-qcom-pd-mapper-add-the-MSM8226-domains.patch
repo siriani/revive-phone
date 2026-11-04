@@ -1,0 +1,47 @@
+From 426325de88d72eb6d3b0763b64714c5b86c4fa36 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:42:50 -0300
+Subject: [PATCH 3/4] soc: qcom: pd-mapper: add the MSM8226 domains
+
+Register msm/adsp/audio_pd (avs/audio) for qcom,msm8226 instead of
+.data = NULL. The MSM8226 ADSP firmware has no service registry, so the
+entry only answers locator queries; the NGD in PIO mode does not
+depend on it.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ drivers/soc/qcom/qcom_pd_mapper.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/soc/qcom/qcom_pd_mapper.c b/drivers/soc/qcom/qcom_pd_mapper.c
+index 3abea241b..788bca59f 100644
+--- a/drivers/soc/qcom/qcom_pd_mapper.c
++++ b/drivers/soc/qcom/qcom_pd_mapper.c
+@@ -360,6 +360,15 @@ static const struct qcom_pdm_domain_data mpss_wlan_pd = {
+ 	},
+ };
+ 
++/*
++ * MSM8226: the ADSP firmware has no service registry, so this entry only
++ * answers locator queries for "avs/audio"; nothing will ever notify on it.
++ */
++static const struct qcom_pdm_domain_data *msm8226_domains[] = {
++	&adsp_audio_pd,
++	NULL,
++};
++
+ static const struct qcom_pdm_domain_data *msm8996_domains[] = {
+ 	&msm8996_adsp_audio_pd,
+ 	&msm8996_adsp_root_pd,
+@@ -552,7 +561,7 @@ static const struct of_device_id qcom_pdm_domains[] __maybe_unused = {
+ 	{ .compatible = "qcom,apq8074", .data = NULL, },
+ 	{ .compatible = "qcom,apq8084", .data = NULL, },
+ 	{ .compatible = "qcom,apq8096", .data = msm8996_domains, },
+-	{ .compatible = "qcom,msm8226", .data = NULL, },
++	{ .compatible = "qcom,msm8226", .data = msm8226_domains, },
+ 	{ .compatible = "qcom,msm8909", .data = NULL, },
+ 	{ .compatible = "qcom,msm8916", .data = NULL, },
+ 	{ .compatible = "qcom,msm8939", .data = NULL, },
+-- 
+2.43.0
+

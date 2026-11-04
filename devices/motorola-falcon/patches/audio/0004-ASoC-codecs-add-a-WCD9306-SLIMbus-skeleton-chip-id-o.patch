@@ -1,0 +1,214 @@
+From 84670a39e8279fafe8cd672b3d9b389a885d7d29 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:42:56 -0300
+Subject: [PATCH 4/4] ASoC: codecs: add a WCD9306 SLIMbus skeleton (chip id
+ only)
+
+Minimal driver for the WCD9306 (tapan) codec of the MSM8226 on
+SLIMbus: it enumerates the device, pulses the optional reset GPIO
+(low 20 ms, high 20 ms, once), requests a logical address with a few
+retries and, when the device comes up, reads the chip id from
+0x800 + 0x004..0x007 (the downstream WCD9XXX_REGISTER_START_OFFSET,
+like the mainline wcd9335 "reg base 0x800"). No audio path yet.
+
+On the Moto G 2013 (falcon) it reads major 0x0103 (tapan).
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ sound/soc/codecs/Kconfig   |   7 ++
+ sound/soc/codecs/Makefile  |   2 +
+ sound/soc/codecs/wcd9306.c | 144 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 153 insertions(+)
+ create mode 100644 sound/soc/codecs/wcd9306.c
+
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 126f89731..8a1091861 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -2227,6 +2227,13 @@ config SND_SOC_UDA1380
+ config SND_SOC_WCD_CLASSH
+ 	tristate
+ 
++config SND_SOC_WCD9306
++	tristate "WCD9306 Codec (esqueleto, so chip id)"
++	depends on SLIMBUS
++	help
++	  Esqueleto do codec WCD9306 (tapan) do MSM8226, ligado por SLIMbus.
++	  Por enquanto so enumera e le o chip id para o log. Sem audio.
++
+ config SND_SOC_WCD9335
+ 	tristate "WCD9335 Codec"
+ 	depends on SLIMBUS
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index 6d7aa109e..b14e07a58 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -340,6 +340,7 @@ snd-soc-uda1380-y := uda1380.o
+ snd-soc-wcd-classh-y := wcd-clsh-v2.o
+ snd-soc-wcd-mbhc-y := wcd-mbhc-v2.o
+ snd-soc-wcd9335-y := wcd9335.o
++snd-soc-wcd9306-y := wcd9306.o
+ snd-soc-wcd934x-y := wcd934x.o
+ snd-soc-wcd937x-y := wcd937x.o
+ snd-soc-wcd937x-sdw-y := wcd937x-sdw.o
+@@ -761,6 +762,7 @@ obj-$(CONFIG_SND_SOC_UDA1380)	+= snd-soc-uda1380.o
+ obj-$(CONFIG_SND_SOC_WCD_CLASSH)	+= snd-soc-wcd-classh.o
+ obj-$(CONFIG_SND_SOC_WCD_MBHC)	+= snd-soc-wcd-mbhc.o
+ obj-$(CONFIG_SND_SOC_WCD9335)	+= snd-soc-wcd9335.o
++obj-$(CONFIG_SND_SOC_WCD9306)	+= snd-soc-wcd9306.o
+ obj-$(CONFIG_SND_SOC_WCD934X)	+= snd-soc-wcd934x.o
+ obj-$(CONFIG_SND_SOC_WCD937X)	+= snd-soc-wcd937x.o
+ ifdef CONFIG_SND_SOC_WCD937X_SDW
+diff --git a/sound/soc/codecs/wcd9306.c b/sound/soc/codecs/wcd9306.c
+new file mode 100644
+index 000000000..3ab35c744
+--- /dev/null
++++ b/sound/soc/codecs/wcd9306.c
+@@ -0,0 +1,144 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * WCD9306 (tapan) audio codec over SLIMbus: esqueleto.
++ *
++ * Por enquanto so enumera pelo barramento SLIMbus (manf 0x217, prod 0xe0,
++ * EA downstream 00 01 e0 00 17 02) e le o chip id para o dmesg.
++ * Sem caminho de audio, sem MBHC, sem supplies.
++ *
++ * Registradores (downstream LineageOS msm8226, wcd9306_registers.h):
++ *   TAPAN_A_CHIP_ID_BYTE_0..3 = 0x004..0x007.
++ * No MFD downstream (wcd9xxx-core.c) o minor vem de BYTE_0..1 e o major de
++ * BYTE_2..3, little endian. TAPAN_MAJOR = 0x0103 (core.h), ou seja
++ * BYTE_2 = 0x03 e BYTE_3 = 0x01 (o POR de BYTE_3 e 0x01).
++ * O downstream separa WCD9306 de WCD9302 por QFUSE, nao pelo chip id; aqui
++ * so logamos o valor, sem decidir a variante.
++ *
++ * Acesso pelo SLIMbus: o downstream soma WCD9XXX_REGISTER_START_OFFSET
++ * (0x800) ao endereco do registrador (wcd9xxx_slim_read_device), igual ao
++ * "reg base 0x800" do wcd9335 mainline. Entao BYTE_0..3 = 0x804..0x807 no
++ * barramento.
++ *
++ * Sequencia (wcd9xxx_slim_probe downstream): supplies estaticas, reset
++ * (gpio 72: baixo 20 ms, alto 20 ms), endereco logico, leitura do chip id.
++ * Aqui: "reset-gpios" opcional no no do codec; as supplies ficam a cargo do
++ * DT (regulator-always-on em l4/l6), o esqueleto nao as liga.
++ */
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/slimbus.h>
++#include <sound/soc.h>
++
++#define WCD9306_SLIM_REG_BASE	0x800
++#define WCD9306_CHIP_ID_BYTE_0	0x004
++#define WCD9306_CHIP_ID_COUNT	4
++#define WCD9306_CHIP_MAJOR	0x0103
++#define WCD9306_LADDR_TRIES	10
++
++/* o reset so e pulsado uma vez, mesmo que o probe volte por EPROBE_DEFER */
++static bool wcd9306_reset_done;
++
++static const struct snd_soc_component_driver wcd9306_component_drv = {
++	.name = "wcd9306-codec",
++};
++
++static void wcd9306_read_chip_id(struct slim_device *sdev)
++{
++	struct device *dev = &sdev->dev;
++	u8 id[WCD9306_CHIP_ID_COUNT];
++	u16 major, minor;
++	int i, val;
++
++	for (i = 0; i < WCD9306_CHIP_ID_COUNT; i++) {
++		u32 reg = WCD9306_CHIP_ID_BYTE_0 + i;
++
++		val = slim_readb(sdev, WCD9306_SLIM_REG_BASE + reg);
++		if (val < 0) {
++			dev_err(dev, "leitura 0x%03x (slim 0x%03x) falhou: %d\n",
++				reg, WCD9306_SLIM_REG_BASE + reg, val);
++			return;
++		}
++		id[i] = val;
++		dev_info(dev, "chip id reg 0x%03x = 0x%02x\n", reg, val);
++	}
++
++	minor = id[0] | (id[1] << 8);
++	major = id[2] | (id[3] << 8);
++	dev_info(dev, "chip id major 0x%04x minor 0x%04x\n", major, minor);
++	if (major != WCD9306_CHIP_MAJOR)
++		dev_warn(dev, "chip major 0x%04x, esperado 0x%04x (tapan)\n",
++			 major, WCD9306_CHIP_MAJOR);
++}
++
++static int wcd9306_slim_status(struct slim_device *sdev,
++			       enum slim_device_status status)
++{
++	dev_info(&sdev->dev, "status SLIMbus %s, LA 0x%x\n",
++		 status == SLIM_DEVICE_STATUS_UP ? "UP" : "DOWN", sdev->laddr);
++	if (status == SLIM_DEVICE_STATUS_UP)
++		wcd9306_read_chip_id(sdev);
++
++	return 0;
++}
++
++static int wcd9306_slim_probe(struct slim_device *sdev)
++{
++	struct device *dev = &sdev->dev;
++	struct gpio_desc *reset;
++	int i, ret = -ENXIO;
++
++	reset = devm_gpiod_get_optional(dev, "reset", GPIOD_ASIS);
++	if (IS_ERR(reset))
++		return dev_err_probe(dev, PTR_ERR(reset), "reset-gpios\n");
++
++	if (reset && !wcd9306_reset_done) {
++		/* reset-gpios e ativo baixo: 1 = em reset */
++		gpiod_direction_output(reset, 1);
++		msleep(20);
++		gpiod_set_value_cansleep(reset, 0);
++		msleep(20);
++		wcd9306_reset_done = true;
++		dev_info(dev, "reset do codec pulsado\n");
++	} else if (!reset) {
++		dev_info(dev, "sem reset-gpios: codec precisa ja estar fora de reset\n");
++	}
++
++	/*
++	 * O ADSP so responde ao ADDR_QUERY depois do REPORT_PRESENT do codec;
++	 * como o downstream (LADDR_RETRY), tenta algumas vezes. Ao conseguir,
++	 * o nucleo chama wcd9306_slim_status(UP), que le o chip id.
++	 */
++	for (i = 0; i < WCD9306_LADDR_TRIES; i++) {
++		ret = slim_get_logical_addr(sdev);
++		if (!ret)
++			break;
++		msleep(20);
++	}
++	if (ret)
++		dev_err(dev, "sem endereco logico apos %d tentativas: %d\n",
++			WCD9306_LADDR_TRIES, ret);
++
++	return devm_snd_soc_register_component(dev, &wcd9306_component_drv,
++					       NULL, 0);
++}
++
++static const struct slim_device_id wcd9306_slim_id[] = {
++	{0x0217, 0x00e0, 0x1, 0x0},
++	{}
++};
++MODULE_DEVICE_TABLE(slim, wcd9306_slim_id);
++
++static struct slim_driver wcd9306_slim_driver = {
++	.driver = {
++		.name = "wcd9306-slim",
++	},
++	.probe = wcd9306_slim_probe,
++	.device_status = wcd9306_slim_status,
++	.id_table = wcd9306_slim_id,
++};
++module_slim_driver(wcd9306_slim_driver);
++
++MODULE_DESCRIPTION("WCD9306 SLIMbus codec (esqueleto)");
++MODULE_AUTHOR("Allan Siriani <allan@fatecpompeia.edu.br>");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+

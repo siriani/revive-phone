@@ -1,0 +1,43 @@
+From 5c7838ea992e750ee9d5d46ea752ceff6138f1cf Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 09:24:11 -0300
+Subject: [PATCH 2/5] media: qcom: camss: csid-4-1: match the MSM8226
+ CORE_CTRL_1 setup
+
+The CSID of MSM8226 is the v3.0 block (the downstream kernel builds it
+with CONFIG_MSM_CSI30_HEADER), so the register offsets used by
+camss-csid-4-1.c are right. The only difference in the stream setup is
+CORE_CTRL_1: the downstream msm_csid_config() writes
+"phy_sel << 17 | 0xF", while this driver writes 0x9 in the low bits.
+
+Write 0xF on MSM8226 and leave the other platforms untouched.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ drivers/media/platform/qcom/camss/camss-csid-4-1.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csid-4-1.c b/drivers/media/platform/qcom/camss/camss-csid-4-1.c
+index 6998e1c52..6be09f327 100644
+--- a/drivers/media/platform/qcom/camss/camss-csid-4-1.c
++++ b/drivers/media/platform/qcom/camss/camss-csid-4-1.c
+@@ -99,7 +99,15 @@ static void csid_configure_stream(struct csid_device *csid, u8 enable)
+ 			writel_relaxed(val, csid->base + CAMSS_CSID_CORE_CTRL_0);
+ 
+ 			val = phy->csiphy_id << 17;
+-			val |= 0x9;
++			/*
++			 * The MSM8226 downstream driver (msm_csid.c, CSID
++			 * v3.0 path) sets all of bits 3:0 here. Keep the 0x9
++			 * used for MSM8916 everywhere else.
++			 */
++			if (csid->camss->res->version == CAMSS_8x26)
++				val |= 0xf;
++			else
++				val |= 0x9;
+ 
+ 			writel_relaxed(val, csid->base + CAMSS_CSID_CORE_CTRL_1);
+ 		}
+-- 
+2.43.0
+

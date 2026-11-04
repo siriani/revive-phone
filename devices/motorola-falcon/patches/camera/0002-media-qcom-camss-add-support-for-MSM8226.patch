@@ -1,0 +1,156 @@
+From 0b85685e790eabbdbd933f3b5b3d328f4952de6a Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 00:12:16 -0300
+Subject: [PATCH 2/3] media: qcom: camss: add support for MSM8226
+
+Add the qcom,msm8226-camss compatible with its own resource description
+(CAMSS_8x26). The subdevice tables are shared with MSM8916 (CSIPHY 2ph
+1.0, CSID 4.1, ISPIF with two lines, VFE 4.1) and every version check
+that tests for CAMSS_8x16 also accepts CAMSS_8x26.
+
+This is a port by analogy, not verified against the MSM8226 register
+map: the downstream kernel names the VFE "vfe40" and the CSID and CSIPHY
+versions are not described in its device tree.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ .../media/platform/qcom/camss/camss-csid.c    |  3 ++-
+ .../media/platform/qcom/camss/camss-csiphy.c  |  1 +
+ .../media/platform/qcom/camss/camss-ispif.c   |  9 ++++++---
+ drivers/media/platform/qcom/camss/camss-vfe.c |  1 +
+ drivers/media/platform/qcom/camss/camss.c     | 20 +++++++++++++++++++
+ drivers/media/platform/qcom/camss/camss.h     |  1 +
+ 6 files changed, 31 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csid.c b/drivers/media/platform/qcom/camss/camss-csid.c
+index 5284b5857..ccead9b5e 100644
+--- a/drivers/media/platform/qcom/camss/camss-csid.c
++++ b/drivers/media/platform/qcom/camss/camss-csid.c
+@@ -632,7 +632,8 @@ u32 csid_hw_version(struct csid_device *csid)
+ u32 csid_src_pad_code(struct csid_device *csid, u32 sink_code,
+ 		      unsigned int match_format_idx, u32 match_code)
+ {
+-	if (csid->camss->res->version == CAMSS_8x16) {
++	if (csid->camss->res->version == CAMSS_8x16 ||
++	    csid->camss->res->version == CAMSS_8x26) {
+ 		if (match_format_idx > 0)
+ 			return 0;
+ 
+diff --git a/drivers/media/platform/qcom/camss/camss-csiphy.c b/drivers/media/platform/qcom/camss/camss-csiphy.c
+index c622efcc9..c50edeb78 100644
+--- a/drivers/media/platform/qcom/camss/camss-csiphy.c
++++ b/drivers/media/platform/qcom/camss/camss-csiphy.c
+@@ -605,6 +605,7 @@ int msm_csiphy_subdev_init(struct camss *camss,
+ 		return PTR_ERR(csiphy->base);
+ 
+ 	if (camss->res->version == CAMSS_8x16 ||
++	    camss->res->version == CAMSS_8x26 ||
+ 	    camss->res->version == CAMSS_8x53 ||
+ 	    camss->res->version == CAMSS_8x96) {
+ 		csiphy->base_clk_mux =
+diff --git a/drivers/media/platform/qcom/camss/camss-ispif.c b/drivers/media/platform/qcom/camss/camss-ispif.c
+index 2dc585c61..91ee088ea 100644
+--- a/drivers/media/platform/qcom/camss/camss-ispif.c
++++ b/drivers/media/platform/qcom/camss/camss-ispif.c
+@@ -1110,7 +1110,8 @@ int msm_ispif_subdev_init(struct camss *camss,
+ 	ispif->camss = camss;
+ 
+ 	/* Number of ISPIF lines - same as number of CSID hardware modules */
+-	if (camss->res->version == CAMSS_8x16)
++	if (camss->res->version == CAMSS_8x16 ||
++	    camss->res->version == CAMSS_8x26)
+ 		ispif->line_num = 2;
+ 	else if (camss->res->version == CAMSS_8x96 ||
+ 		 camss->res->version == CAMSS_8x53 ||
+@@ -1128,7 +1129,8 @@ int msm_ispif_subdev_init(struct camss *camss,
+ 		ispif->line[i].ispif = ispif;
+ 		ispif->line[i].id = i;
+ 
+-		if (camss->res->version == CAMSS_8x16) {
++		if (camss->res->version == CAMSS_8x16 ||
++		    camss->res->version == CAMSS_8x26) {
+ 			ispif->line[i].formats = ispif_formats_8x16;
+ 			ispif->line[i].nformats =
+ 					ARRAY_SIZE(ispif_formats_8x16);
+@@ -1162,7 +1164,8 @@ int msm_ispif_subdev_init(struct camss *camss,
+ 	ispif->irq = ret;
+ 	snprintf(ispif->irq_name, sizeof(ispif->irq_name), "%s_%s",
+ 		 dev_name(dev), MSM_ISPIF_NAME);
+-	if (camss->res->version == CAMSS_8x16)
++	if (camss->res->version == CAMSS_8x16 ||
++	    camss->res->version == CAMSS_8x26)
+ 		ret = devm_request_irq(dev, ispif->irq, ispif_isr_8x16,
+ 			       IRQF_TRIGGER_RISING, ispif->irq_name, ispif);
+ 	else if (camss->res->version == CAMSS_8x96 ||
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe.c b/drivers/media/platform/qcom/camss/camss-vfe.c
+index 4bca6c3ab..4c327530b 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe.c
+@@ -290,6 +290,7 @@ static u32 vfe_src_pad_code(struct vfe_line *line, u32 sink_code,
+ 
+ 	switch (vfe->camss->res->version) {
+ 	case CAMSS_8x16:
++	case CAMSS_8x26:
+ 	case CAMSS_8x53:
+ 		switch (sink_code) {
+ 		case MEDIA_BUS_FMT_YUYV8_1X16:
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index 1507c7991..4b2d7e3de 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -3585,6 +3585,7 @@ static int camss_probe(struct platform_device *pdev)
+ 		return -ENOMEM;
+ 
+ 	if (camss->res->version == CAMSS_8x16 ||
++	    camss->res->version == CAMSS_8x26 ||
+ 	    camss->res->version == CAMSS_8x53 ||
+ 	    camss->res->version == CAMSS_8x96) {
+ 		camss->ispif = devm_kcalloc(dev, 1, sizeof(*camss->ispif), GFP_KERNEL);
+@@ -3729,6 +3730,24 @@ static const struct camss_resources msm8916_resources = {
+ 	.link_entities = camss_link_entities
+ };
+ 
++/*
++ * MSM8226 (Moto G falcon): 2x CSIPHY (2ph 1.0), 2x CSID, ISPIF de 2 linhas
++ * e 1 VFE. Os sub-recursos reusam as tabelas do 8x16, mas a versao e
++ * propria, para que o driver possa divergir nos pontos onde o 8226 diferir
++ * (ver o commit de DT para os nomes de clock e registradores).
++ */
++static const struct camss_resources msm8226_resources = {
++	.version = CAMSS_8x26,
++	.csiphy_res = csiphy_res_8x16,
++	.csid_res = csid_res_8x16,
++	.ispif_res = &ispif_res_8x16,
++	.vfe_res = vfe_res_8x16,
++	.csiphy_num = ARRAY_SIZE(csiphy_res_8x16),
++	.csid_num = ARRAY_SIZE(csid_res_8x16),
++	.vfe_num = ARRAY_SIZE(vfe_res_8x16),
++	.link_entities = camss_link_entities
++};
++
+ static const struct camss_resources msm8953_resources = {
+ 	.version = CAMSS_8x53,
+ 	.icc_res = icc_res_8x53,
+@@ -3865,6 +3884,7 @@ static const struct camss_resources x1e80100_resources = {
+ 
+ static const struct of_device_id camss_dt_match[] = {
+ 	{ .compatible = "qcom,msm8916-camss", .data = &msm8916_resources },
++	{ .compatible = "qcom,msm8226-camss", .data = &msm8226_resources },
+ 	{ .compatible = "qcom,msm8953-camss", .data = &msm8953_resources },
+ 	{ .compatible = "qcom,msm8996-camss", .data = &msm8996_resources },
+ 	{ .compatible = "qcom,sc7280-camss", .data = &sc7280_resources },
+diff --git a/drivers/media/platform/qcom/camss/camss.h b/drivers/media/platform/qcom/camss/camss.h
+index 63c0afee1..678ffe4b1 100644
+--- a/drivers/media/platform/qcom/camss/camss.h
++++ b/drivers/media/platform/qcom/camss/camss.h
+@@ -80,6 +80,7 @@ enum camss_version {
+ 	CAMSS_660,
+ 	CAMSS_7280,
+ 	CAMSS_8x16,
++	CAMSS_8x26,
+ 	CAMSS_8x53,
+ 	CAMSS_8x96,
+ 	CAMSS_8250,
+-- 
+2.43.0
+

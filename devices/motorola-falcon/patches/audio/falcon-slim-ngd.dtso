@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Overlay for the falcon (MSM8226): SLIMbus NGD in PIO mode + WCD9306 codec.
+ * This is the configuration the codec enumerated with (chip id 0x0103).
+ *
+ * Apply it ON TOP of the DTB in use with fdtoverlay. The DTB built from
+ * msm8226-motorola-falcon.dts has no __symbols__, so nothing here uses
+ * &labels: the targets are paths (target-path). The codec reset-gpios needs
+ * the TLMM phandle and is added afterwards with fdtput, e.g.:
+ *
+ *   dtc -I dts -O dtb -o falcon-slim-ngd.dtbo falcon-slim-ngd.dtso
+ *   fdtoverlay -i device.dtb -o device-audio.dtb falcon-slim-ngd.dtbo
+ *   TLMM=$(fdtget -t u device-audio.dtb /soc/pinctrl@fd510000 phandle)
+ *   fdtput -t u device-audio.dtb /soc/slim-ngd@fe12f000/slim@1/codec@1,0 \
+ *          reset-gpios $TLMM 72 1          # GPIO 72, GPIO_ACTIVE_LOW
+ *
+ * Needs the kernel patches in this folder (NGD PIO mode, pd-mapper, WCD9306).
+ * It does not touch any mmc/sdhci node (keep the sdhci-caps-mask).
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "/soc";
+
+		__overlay__ {
+			/*
+			 * Downstream: slim@fe12f000, cell-index 1, IRQ 163.
+			 * The BAM (fe104000, IRQ 164) is not used in PIO mode.
+			 */
+			slim-ngd@fe12f000 {
+				compatible = "qcom,slim-ngd-v1.3.0";
+				reg = <0xfe12f000 0x35000>;
+				/* GIC_SPI 163 IRQ_TYPE_LEVEL_HIGH */
+				interrupts = <0 163 4>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				/* the dtsi node from patch 0001, if present, is disabled */
+				status = "okay";
+				/*
+				 * Optional: force the NGD offset (0x800 = V1 layout,
+				 * 0x1000 = V2). Without it the driver reads the HW
+				 * version (bits 31:16 at fe12f000), like downstream.
+				 * qcom,ngd-offset = <0x800>;
+				 */
+
+				slim@1 {
+					reg = <1>;
+					#address-cells = <2>;
+					#size-cells = <0>;
+
+					/* WCD9306 (tapan), manufacturer 0x217, product 0xe0 */
+					codec@1,0 {
+						compatible = "slim217,e0";
+						reg = <1 0>;
+						/* reset-gpios = <&tlmm 72 GPIO_ACTIVE_LOW>; via fdtput */
+					};
+				};
+			};
+		};
+	};
+
+	/*
+	 * Codec VDD_CX (cdc-vdd-cx = l4, 1.2 V downstream). In the mainline DTB
+	 * l4 only feeds the DSI PHY, so it may turn off with the display off.
+	 * VDD_PX/VDD_H (l6, 1.8 V) is the eMMC vqmmc and is always on already.
+	 */
+	fragment@1 {
+		target-path = "/remoteproc/smd-edge/rpm-requests/regulators/l4";
+
+		__overlay__ {
+			regulator-always-on;
+		};
+	};
+};

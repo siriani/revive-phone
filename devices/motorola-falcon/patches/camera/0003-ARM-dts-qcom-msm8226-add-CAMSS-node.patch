@@ -1,0 +1,86 @@
+From 8a0a3ede9eb51fbb40244b51854e823f279e9f51 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 00:12:16 -0300
+Subject: [PATCH 3/3] ARM: dts: qcom: msm8226: add CAMSS node
+
+Add the camera subsystem node with the two CSIPHY, two CSID, ISPIF and
+VFE register blocks and interrupts taken from the downstream device
+tree. The node is disabled by default; the board enables it.
+
+The clock names match the msm8226 MMCC clocks (camss_micro_ahb is used
+for the generic "ahb" clock).
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ arch/arm/boot/dts/qcom/qcom-msm8226.dtsi | 55 ++++++++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+
+diff --git a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+index 9fb547080..9ef65589c 100644
+--- a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
++++ b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+@@ -1373,6 +1373,61 @@ mdss_dsi0_phy: phy@fd922a00 {
+ 			};
+ 		};
+ 
++		camss: camss@fda0ac00 {
++			compatible = "qcom,msm8226-camss";
++			reg = <0xfda0ac00 0x200>,	/* csiphy0 */
++			      <0xfda00030 0x4>,		/* csiphy0_clk_mux */
++			      <0xfda0b000 0x200>,	/* csiphy1 */
++			      <0xfda00038 0x4>,		/* csiphy1_clk_mux */
++			      <0xfda08000 0x100>,	/* csid0 */
++			      <0xfda08400 0x100>,	/* csid1 */
++			      <0xfda0a000 0x500>,	/* ispif */
++			      <0xfda00020 0x10>,	/* csi_clk_mux */
++			      <0xfda10000 0x1000>;	/* vfe0 */
++			reg-names = "csiphy0", "csiphy0_clk_mux",
++				    "csiphy1", "csiphy1_clk_mux",
++				    "csid0", "csid1",
++				    "ispif", "csi_clk_mux",
++				    "vfe0";
++			interrupts = <GIC_SPI 78 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 79 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 51 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 52 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 55 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 57 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "csiphy0", "csiphy1",
++					  "csid0", "csid1",
++					  "ispif", "vfe0";
++			clocks = <&mmcc CAMSS_TOP_AHB_CLK>,
++				 <&mmcc CAMSS_ISPIF_AHB_CLK>,
++				 <&mmcc CAMSS_PHY0_CSI0PHYTIMER_CLK>,
++				 <&mmcc CAMSS_PHY1_CSI1PHYTIMER_CLK>,
++				 <&mmcc CAMSS_CSI0_AHB_CLK>,
++				 <&mmcc CAMSS_CSI0_CLK>,
++				 <&mmcc CAMSS_CSI0PHY_CLK>,
++				 <&mmcc CAMSS_CSI0PIX_CLK>,
++				 <&mmcc CAMSS_CSI0RDI_CLK>,
++				 <&mmcc CAMSS_CSI1_AHB_CLK>,
++				 <&mmcc CAMSS_CSI1_CLK>,
++				 <&mmcc CAMSS_CSI1PHY_CLK>,
++				 <&mmcc CAMSS_CSI1PIX_CLK>,
++				 <&mmcc CAMSS_CSI1RDI_CLK>,
++				 <&mmcc CAMSS_MICRO_AHB_CLK>,
++				 <&mmcc CAMSS_VFE_VFE0_CLK>,
++				 <&mmcc CAMSS_CSI_VFE0_CLK>,
++				 <&mmcc CAMSS_VFE_VFE_AHB_CLK>,
++				 <&mmcc CAMSS_VFE_VFE_AXI_CLK>;
++			clock-names = "top_ahb", "ispif_ahb",
++				      "csiphy0_timer", "csiphy1_timer",
++				      "csi0_ahb", "csi0", "csi0_phy", "csi0_pix", "csi0_rdi",
++				      "csi1_ahb", "csi1", "csi1_phy", "csi1_pix", "csi1_rdi",
++				      "ahb",
++				      "vfe0", "csi_vfe0", "vfe_ahb", "vfe_axi";
++			power-domains = <&mmcc CAMSS_VFE_GDSC>;
++
++			status = "disabled";
++		};
++
+ 		cci: cci@fda0c000 {
+ 			compatible = "qcom,msm8226-cci";
+ 			reg = <0xfda0c000 0x1000>;
+-- 
+2.43.0
+

@@ -1,0 +1,57 @@
+From 3493273e46867b1c8e05959cc585de97be0ac133 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:42:47 -0300
+Subject: [PATCH 1/4] ARM: dts: qcom: msm8226: add the SLIMbus NGD node
+ (disabled)
+
+Add the SLIMbus non-ported generic device (NGD) of the MSM8226 at
+0xfe12f000 (IRQ 163), with the WCD9306 codec (manufacturer 0x217,
+product 0xe0) as its child. The node uses the qcom,slim-ngd-v1.3.0
+compatible, which drives the NGD in PIO mode: the BAM at 0xfe104000 is
+not used. Disabled by default; the board enables it.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ arch/arm/boot/dts/qcom/qcom-msm8226.dtsi | 26 ++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+index 9fb547080..39a2805f6 100644
+--- a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
++++ b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+@@ -1491,6 +1491,32 @@ smd-edge {
+ 			};
+ 		};
+ 
++		/*
++		 * SLIMbus NGD do MSM8226 (downstream: slim@fe12f000, cell-index 1,
++		 * IRQ 163). Mensagens por registrador (PIO), como o downstream antes
++		 * de ligar as filas BAM; o BAM (fe104000, IRQ 164) nao e usado.
++		 */
++		slim_ngd: slim-ngd@fe12f000 {
++			compatible = "qcom,slim-ngd-v1.3.0";
++			reg = <0xfe12f000 0x35000>;
++			interrupts = <GIC_SPI 163 IRQ_TYPE_LEVEL_HIGH>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++			status = "disabled";
++
++			slim@1 {
++				reg = <1>;
++				#address-cells = <2>;
++				#size-cells = <0>;
++
++				/* WCD9306 (tapan): EA downstream 00 01 e0 00 17 02 */
++				codec@1,0 {
++					compatible = "slim217,e0";
++					reg = <1 0>;
++				};
++			};
++		};
++
+ 		sram@fe805000 {
+ 			compatible = "qcom,msm8226-imem", "syscon", "simple-mfd";
+ 			reg = <0xfe805000 0x1000>;
+-- 
+2.43.0
+

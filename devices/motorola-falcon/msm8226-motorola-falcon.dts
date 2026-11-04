@@ -654,3 +654,88 @@
 	firmware-name = "qcom/msm8226/motorola/falcon/adsp.mdt";
 	status = "okay";
 };
+
+/*
+ * Front camera: MT9M114 (onnn,mt9m114) on CCI master 0, address 0x48, wired to
+ * CSIPHY 1. Needs patches/camera (CAMSS for MSM8226); without them the camss
+ * node simply does not probe.
+ *   - MCLK1 on GPIO 27 at 19.2 MHz; link frequency 307.2 MHz on one lane
+ *     (19.2 MHz * 32 / (2 * 8) = 38.4 MHz pixel clock, * 8 bits).
+ *   - Only L6 (1.8 V) and CAM_PWREN (GPIO 23, 4 ms) power the sensor, as in
+ *     the stock kernel; no reset or standby line.
+ *   - data-lanes = <0> on the CSIPHY side: LN1 is the clock lane of the
+ *     2-phase CSIPHY, data is on LN0 (stock: csi-lane-mask 0x03,
+ *     csi-lane-assign 0x4320). With <1> no frame ever reached the CSID.
+ */
+/ {
+	cam_pwren: regulator-cam-pwren {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_pwren";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&tlmm 23 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <4000>;
+		vin-supply = <&pm8226_l6>;
+	};
+};
+
+&tlmm {
+	cam_mclk1_default: cam-mclk1-default-state {
+		pins = "gpio27";
+		function = "cam_mclk1";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&cci {
+	status = "okay";
+};
+
+&cci_i2c0 {
+	mt9m114: sensor@48 {
+		compatible = "onnn,mt9m114";
+		reg = <0x48>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&cam_mclk1_default>;
+
+		clocks = <&mmcc CAMSS_MCLK1_CLK>;
+		assigned-clocks = <&mmcc MCLK1_CLK_SRC>;
+		assigned-clock-rates = <19200000>;
+
+		vdd-supply = <&pm8226_l6>;
+		vddio-supply = <&pm8226_l6>;
+		vaa-supply = <&cam_pwren>;
+
+		port {
+			mt9m114_ep: endpoint {
+				bus-type = <4>; /* MEDIA_BUS_TYPE_CSI2_DPHY */
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <307200000>;
+				remote-endpoint = <&camss_csiphy1_ep>;
+			};
+		};
+	};
+};
+
+&camss {
+	status = "okay";
+	vdda-supply = <&pm8226_l4>;
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+
+			camss_csiphy1_ep: endpoint {
+				bus-type = <4>; /* MEDIA_BUS_TYPE_CSI2_DPHY */
+				data-lanes = <0>;
+				remote-endpoint = <&mt9m114_ep>;
+			};
+		};
+	};
+};

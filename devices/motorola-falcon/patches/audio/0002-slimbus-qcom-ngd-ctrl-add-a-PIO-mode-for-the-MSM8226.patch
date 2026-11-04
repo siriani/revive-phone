@@ -1,0 +1,582 @@
+From f8550630dde3c0478002ff6d8e578f203b907d84 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 11:42:48 -0300
+Subject: [PATCH 2/4] slimbus: qcom-ngd-ctrl: add a PIO mode for the MSM8226
+ NGD
+
+The MSM8226 NGD exchanges messages through the NGD_TX_MSG (0x30) and
+NGD_RX_MSG (0x70) registers, as the downstream slim-msm-ngd.c does
+until it switches to the BAM queues. The mainline driver only had the
+DMA queues, whose BAM pipes are allocated at runtime on this SoC and
+are not described in the device tree.
+
+New compatible qcom,slim-ngd-v1.3.0 (or the qcom,pio-mode property):
+- TX: write the message word by word to NGD_TX_MSG and wait for
+  NGD_INT_TX_MSG_SENT; a NACK or error becomes -EIO (the capability
+  worker already retries on -EIO).
+- RX: on NGD_INT_RX_MSG_RCVD read NGD_RX_MSG and hand it to the same
+  qcom_slim_ngd_rx() used by the DMA path.
+- NGD_CFG only gets ENABLE (queues off), no NGD_RX_MSGQ_CFG.
+- NGD base from the version read at reg+0 after the QMI vote: version 0
+  uses the V1 layout (0x800/0xA00), otherwise V2 (0x1000/0x2000).
+  qcom,ngd-offset overrides it.
+- No PDR: the MSM8226 ADSP has no service registry. The NGD comes up
+  when the SLIMbus QMI service (0x301) appears, and the "lpass" SSR
+  still covers ADSP restarts. The up worker does not enable twice.
+
+Changes for both paths: work items and workqueue created before the QMI
+lookup, NGD base set before platform_device_add(), flags read before
+request_irq().
+
+The DMA path (v1.5.0/v2.1.0) does not change behaviour.
+
+Tested on the Moto G 2013 (falcon): the WCD9306 enumerates and its chip
+id reads back 0x0103.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ .../bindings/slimbus/qcom,slim-ngd.yaml       |  29 +-
+ drivers/slimbus/qcom-ngd-ctrl.c               | 297 ++++++++++++++++--
+ 2 files changed, 302 insertions(+), 24 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/slimbus/qcom,slim-ngd.yaml b/Documentation/devicetree/bindings/slimbus/qcom,slim-ngd.yaml
+index abf61c152..4a7e287c0 100644
+--- a/Documentation/devicetree/bindings/slimbus/qcom,slim-ngd.yaml
++++ b/Documentation/devicetree/bindings/slimbus/qcom,slim-ngd.yaml
+@@ -19,6 +19,7 @@ description:
+ properties:
+   compatible:
+     enum:
++      - qcom,slim-ngd-v1.3.0        # for MSM8226 (register/PIO messaging)
+       - qcom,slim-ngd-v1.5.0        # for MSM8996
+       - qcom,slim-ngd-v2.1.0        # for SDM845
+ 
+@@ -45,6 +46,19 @@ properties:
+   iommus:
+     maxItems: 1
+ 
++  qcom,pio-mode:
++    type: boolean
++    description:
++      Exchange messages through the NGD TX/RX message registers instead of
++      the BAM message queues. Implied by qcom,slim-ngd-v1.3.0.
++
++  qcom,ngd-offset:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description:
++      Offset of the NGD register block from reg. When absent on
++      qcom,slim-ngd-v1.3.0 it is derived from the hardware version
++      (0x800 for version 0, 0x1000 otherwise, odd NGD index).
++
+ patternProperties:
+   "^slim@[0-9a-f]+$":
+     type: object
+@@ -63,10 +77,21 @@ required:
+   - reg
+   - "#address-cells"
+   - "#size-cells"
+-  - dmas
+-  - dma-names
+   - interrupts
+ 
++allOf:
++  - if:
++      properties:
++        compatible:
++          contains:
++            enum:
++              - qcom,slim-ngd-v1.5.0
++              - qcom,slim-ngd-v2.1.0
++    then:
++      required:
++        - dmas
++        - dma-names
++
+ additionalProperties: false
+ 
+ examples:
+diff --git a/drivers/slimbus/qcom-ngd-ctrl.c b/drivers/slimbus/qcom-ngd-ctrl.c
+index 4fb66986c..42a8d6bcb 100644
+--- a/drivers/slimbus/qcom-ngd-ctrl.c
++++ b/drivers/slimbus/qcom-ngd-ctrl.c
+@@ -42,10 +42,19 @@
+ #define	NGD_INT_TX_MSG_SENT	BIT(31)
+ #define	NGD_INT_STAT		0x14
+ #define	NGD_INT_CLR		0x18
++/* Register (PIO) message access, used by older NGDs (e.g. MSM8226) */
++#define	NGD_TX_MSG		0x30
++#define	NGD_RX_MSG		0x70
+ #define DEF_NGD_INT_MASK (NGD_INT_TX_NACKED_2 | NGD_INT_MSG_BUF_CONTE | \
+ 				NGD_INT_MSG_TX_INVAL | NGD_INT_IE_VE_CHG | \
+ 				NGD_INT_DEV_ERR | NGD_INT_TX_MSG_SENT | \
+ 				NGD_INT_RX_MSG_RCVD)
++#define NGD_INT_ERR_MASK (NGD_INT_TX_NACKED_2 | NGD_INT_MSG_BUF_CONTE | \
++				NGD_INT_MSG_TX_INVAL | NGD_INT_DEV_ERR)
++
++/* NGD register block offset per hardware version (odd/even NGD index) */
++#define NGD_BASE_V1(id)		(((id) % 2) ? 0x800 : 0xA00)
++#define NGD_BASE_V2(id)		(((id) % 2) ? 0x1000 : 0x2000)
+ 
+ /* Slimbus QMI service */
+ #define SLIMBUS_QMI_SVC_ID	0x0301
+@@ -104,6 +113,12 @@
+ 
+ struct ngd_reg_offset_data {
+ 	u32 offset, size;
++	/* messages through NGD_TX_MSG/NGD_RX_MSG registers instead of BAM */
++	bool pio;
++	/* NGD block offset depends on the version read from the controller */
++	bool ver_base;
++	/* remote has no service registry (PDR): follow the SLIMbus QMI service */
++	bool no_pdr;
+ };
+ 
+ static const struct ngd_reg_offset_data ngd_v1_5_offset_info = {
+@@ -111,6 +126,15 @@ static const struct ngd_reg_offset_data ngd_v1_5_offset_info = {
+ 	.size = 0x1000,
+ };
+ 
++/* MSM8226 and other B-family SoCs: register access, version based layout */
++static const struct ngd_reg_offset_data ngd_v1_3_offset_info = {
++	.offset = 0x1000,
++	.size = 0x1000,
++	.pio = true,
++	.ver_base = true,
++	.no_pdr = true,
++};
++
+ enum qcom_slim_ngd_state {
+ 	QCOM_SLIM_NGD_CTRL_AWAKE,
+ 	QCOM_SLIM_NGD_CTRL_IDLE,
+@@ -175,6 +199,13 @@ struct qcom_slim_ngd_ctrl {
+ 	int tx_tail;
+ 	int tx_head;
+ 	u32 ver;
++	/* PIO (register) message mode */
++	bool pio;
++	bool ver_base;
++	bool no_pdr;
++	u32 ngd_offset;			/* DT override of the NGD offset, 0 = auto */
++	struct completion *pio_tx_comp;	/* protected by tx_buf_lock */
++	int pio_tx_err;			/* protected by tx_buf_lock */
+ };
+ 
+ enum slimbus_mode_enum_type_v01 {
+@@ -758,12 +789,131 @@ static int qcom_slim_ngd_init_dma(struct qcom_slim_ngd_ctrl *ctrl)
+ 	return ret;
+ }
+ 
++/*
++ * PIO message path. The message is written word by word to NGD_TX_MSG and
++ * the hardware raises NGD_INT_TX_MSG_SENT (or an error) when it is out.
++ * Caller holds tx_lock, so only one message is in flight.
++ */
++static int qcom_slim_ngd_pio_tx(struct qcom_slim_ngd_ctrl *ctrl, u32 *buf,
++				int len, struct completion *comp)
++{
++	void __iomem *tx = ctrl->ngd->base + NGD_TX_MSG;
++	unsigned long flags;
++	int i, words = (len + 3) >> 2;
++
++	if (words > SLIM_MSGQ_BUF_LEN / 4)
++		return -EINVAL;
++
++	spin_lock_irqsave(&ctrl->tx_buf_lock, flags);
++	ctrl->pio_tx_err = 0;
++	ctrl->pio_tx_comp = comp;
++	spin_unlock_irqrestore(&ctrl->tx_buf_lock, flags);
++
++	for (i = 0; i < words; i++)
++		writel_relaxed(buf[i], tx + i * 4);
++	/* make sure the whole message reached the NGD */
++	mb();
++
++	return 0;
++}
++
++static int qcom_slim_ngd_pio_tx_done(struct qcom_slim_ngd_ctrl *ctrl)
++{
++	unsigned long flags;
++	int err;
++
++	spin_lock_irqsave(&ctrl->tx_buf_lock, flags);
++	ctrl->pio_tx_comp = NULL;
++	err = ctrl->pio_tx_err;
++	spin_unlock_irqrestore(&ctrl->tx_buf_lock, flags);
++
++	return err;
++}
++
++static void qcom_slim_ngd_pio_dump(struct qcom_slim_ngd_ctrl *ctrl)
++{
++	void __iomem *ngd = ctrl->ngd->base;
++
++	dev_err(ctrl->dev, "NGD ver:0x%x cfg:0x%x stat:0x%x rxmsgq:0x%x\n",
++		ctrl->ver, readl_relaxed(ngd + NGD_CFG),
++		readl_relaxed(ngd + NGD_STATUS),
++		readl_relaxed(ngd + NGD_RX_MSGQ_CFG));
++	dev_err(ctrl->dev, "NGD int_en:0x%x int_stat:0x%x\n",
++		readl_relaxed(ngd + NGD_INT_EN),
++		readl_relaxed(ngd + NGD_INT_STAT));
++}
++
++static irqreturn_t qcom_slim_ngd_pio_interrupt(struct qcom_slim_ngd_ctrl *ctrl)
++{
++	void __iomem *base;
++	struct completion *comp = NULL;
++	u32 stat, clr;
++
++	/* NGD child not registered yet: nothing of ours can be pending */
++	if (!ctrl->ngd || !ctrl->ctrl.dev)
++		return IRQ_NONE;
++
++	base = READ_ONCE(ctrl->ngd->base);
++	stat = readl_relaxed(base + NGD_INT_STAT);
++	if (!stat)
++		return IRQ_NONE;
++
++	clr = stat & ~NGD_INT_RX_MSG_RCVD;
++	if (clr)
++		writel_relaxed(clr, base + NGD_INT_CLR);
++
++	if (stat & (NGD_INT_ERR_MASK | NGD_INT_TX_MSG_SENT)) {
++		spin_lock(&ctrl->tx_buf_lock);
++		if (stat & NGD_INT_ERR_MASK)
++			ctrl->pio_tx_err = -EIO;
++		comp = ctrl->pio_tx_comp;
++		ctrl->pio_tx_comp = NULL;
++		spin_unlock(&ctrl->tx_buf_lock);
++		if (stat & NGD_INT_ERR_MASK)
++			dev_err(ctrl->dev, "NGD error interrupt 0x%x\n", stat);
++	}
++
++	if (stat & NGD_INT_RX_MSG_RCVD) {
++		u32 rx[SLIM_MSGQ_BUF_LEN / 4];
++		int i, words;
++
++		rx[0] = readl_relaxed(base + NGD_RX_MSG);
++		words = ((rx[0] & 0x1f) + 3) >> 2;
++		if (words > ARRAY_SIZE(rx))
++			words = ARRAY_SIZE(rx);
++		for (i = 1; i < words; i++)
++			rx[i] = readl_relaxed(base + NGD_RX_MSG + i * 4);
++		writel_relaxed(NGD_INT_RX_MSG_RCVD, base + NGD_INT_CLR);
++		/* clear must land before the next message can be latched */
++		mb();
++		dev_dbg(ctrl->dev, "PIO RX 0x%08x 0x%08x\n", rx[0],
++			words > 1 ? rx[1] : 0);
++		qcom_slim_ngd_rx(ctrl, (u8 *)rx);
++	} else {
++		mb();
++	}
++
++	if (stat & NGD_INT_RECFG_DONE)
++		dev_dbg(ctrl->dev, "reconfig done\n");
++	if (stat & NGD_INT_IE_VE_CHG)
++		dev_info(ctrl->dev, "NGD IE/VE change\n");
++
++	if (comp)
++		complete(comp);
++
++	return IRQ_HANDLED;
++}
++
+ static irqreturn_t qcom_slim_ngd_interrupt(int irq, void *d)
+ {
+ 	struct qcom_slim_ngd_ctrl *ctrl = d;
+-	void __iomem *base = ctrl->ngd->base;
++	void __iomem *base;
+ 	u32 stat;
+ 
++	if (ctrl->pio)
++		return qcom_slim_ngd_pio_interrupt(ctrl);
++
++	base = ctrl->ngd->base;
+ 	if (pm_runtime_suspended(ctrl->ctrl.dev)) {
+ 		dev_warn_once(ctrl->dev, "Interrupt received while suspended\n");
+ 		return IRQ_NONE;
+@@ -792,6 +942,7 @@ static int qcom_slim_ngd_xfer_msg(struct slim_controller *sctrl,
+ 	unsigned long time_left;
+ 	u8 wbuf[SLIM_MSGQ_BUF_LEN];
+ 	u8 rbuf[SLIM_MSGQ_BUF_LEN];
++	u32 pio_buf[SLIM_MSGQ_BUF_LEN / 4];
+ 	u32 *pbuf;
+ 	u8 *puc;
+ 	u8 la = txn->la;
+@@ -811,7 +962,12 @@ static int qcom_slim_ngd_xfer_msg(struct slim_controller *sctrl,
+ 		return -EINVAL;
+ 	}
+ 
+-	pbuf = qcom_slim_ngd_tx_msg_get(ctrl, txn->rl, &tx_sent);
++	if (ctrl->pio) {
++		memset(pio_buf, 0, sizeof(pio_buf));
++		pbuf = pio_buf;
++	} else {
++		pbuf = qcom_slim_ngd_tx_msg_get(ctrl, txn->rl, &tx_sent);
++	}
+ 	if (!pbuf) {
+ 		dev_err(ctrl->dev, "Message buffer unavailable\n");
+ 		return -ENOMEM;
+@@ -885,13 +1041,29 @@ static int qcom_slim_ngd_xfer_msg(struct slim_controller *sctrl,
+ 		memcpy(puc, txn->msg->wbuf, txn->msg->num_bytes);
+ 
+ 	mutex_lock(&ctrl->tx_lock);
+-	ret = qcom_slim_ngd_tx_msg_post(ctrl, pbuf, txn->rl);
++	if (ctrl->pio)
++		ret = qcom_slim_ngd_pio_tx(ctrl, pbuf, txn->rl, &tx_sent);
++	else
++		ret = qcom_slim_ngd_tx_msg_post(ctrl, pbuf, txn->rl);
+ 	if (ret) {
+ 		mutex_unlock(&ctrl->tx_lock);
+ 		return ret;
+ 	}
+ 
+ 	time_left = wait_for_completion_timeout(&tx_sent, HZ);
++	if (ctrl->pio) {
++		/* drop the on-stack completion before anything else */
++		int err = qcom_slim_ngd_pio_tx_done(ctrl);
++
++		if (!time_left || err) {
++			dev_err(sctrl->dev, "PIO TX %s:MC:0x%x,mt:0x%x\n",
++				time_left ? "NACK/error" : "timed out",
++				txn->mc, txn->mt);
++			qcom_slim_ngd_pio_dump(ctrl);
++			mutex_unlock(&ctrl->tx_lock);
++			return time_left ? err : -ETIMEDOUT;
++		}
++	}
+ 	if (!time_left) {
+ 		dev_err(sctrl->dev, "TX timed out:MC:0x%x,mt:0x%x", txn->mc,
+ 					txn->mt);
+@@ -1146,10 +1318,44 @@ static int qcom_slim_ngd_exit_dma(struct qcom_slim_ngd_ctrl *ctrl)
+ 	return 0;
+ }
+ 
++/*
++ * Older NGDs place their register block according to the hardware version
++ * (readable only once the ADSP has powered the bus): version 0 uses the V1
++ * layout (0x800/0xA00), anything else the V2 layout (0x1000/0x2000).
++ * "qcom,ngd-offset" in the DT overrides the detection.
++ */
++static void qcom_slim_ngd_update_base(struct qcom_slim_ngd_ctrl *ctrl)
++{
++	struct qcom_slim_ngd *ngd = ctrl->ngd;
++	void __iomem *base;
++	u32 off;
++
++	if (ctrl->ngd_offset)
++		off = ctrl->ngd_offset;
++	else if (ctrl->ver)
++		off = NGD_BASE_V2(ngd->id);
++	else
++		off = NGD_BASE_V1(ngd->id);
++
++	base = ctrl->base + off;
++	if (base != ngd->base || ctrl->state == QCOM_SLIM_NGD_CTRL_DOWN)
++		dev_info(ctrl->dev, "NGD%d: hw version 0x%x, register offset 0x%x, %s messages\n",
++			 ngd->id, ctrl->ver, off, ctrl->pio ? "PIO" : "BAM");
++	WRITE_ONCE(ngd->base, base);
++}
++
+ static void qcom_slim_ngd_setup(struct qcom_slim_ngd_ctrl *ctrl)
+ {
+ 	u32 cfg = readl_relaxed(ctrl->ngd->base);
+ 
++	if (ctrl->pio) {
++		/* register access mode: NGD on, both message queues off */
++		cfg &= ~(NGD_CFG_RX_MSGQ_EN | NGD_CFG_TX_MSGQ_EN);
++		cfg |= NGD_CFG_ENABLE;
++		writel(cfg, ctrl->ngd->base);
++		return;
++	}
++
+ 	if (ctrl->state == QCOM_SLIM_NGD_CTRL_DOWN ||
+ 		ctrl->state == QCOM_SLIM_NGD_CTRL_ASLEEP)
+ 		qcom_slim_ngd_init_dma(ctrl);
+@@ -1193,6 +1399,9 @@ static int qcom_slim_ngd_power_up(struct qcom_slim_ngd_ctrl *ctrl)
+ 	/* Version info in 16 MSbits */
+ 	ctrl->ver >>= 16;
+ 
++	if (ctrl->ver_base)
++		qcom_slim_ngd_update_base(ctrl);
++
+ 	laddr = readl_relaxed(ngd->base + NGD_STATUS);
+ 	if (laddr & NGD_LADDR) {
+ 		/*
+@@ -1214,10 +1423,12 @@ static int qcom_slim_ngd_power_up(struct qcom_slim_ngd_ctrl *ctrl)
+ 	reinit_completion(&ctrl->reconf);
+ 
+ 	writel_relaxed(DEF_NGD_INT_MASK, ngd->base + NGD_INT_EN);
+-	rx_msgq = readl_relaxed(ngd->base + NGD_RX_MSGQ_CFG);
++	if (!ctrl->pio) {
++		rx_msgq = readl_relaxed(ngd->base + NGD_RX_MSGQ_CFG);
+ 
+-	writel_relaxed(rx_msgq|SLIM_RX_MSGQ_TIMEOUT_VAL,
+-				ngd->base + NGD_RX_MSGQ_CFG);
++		writel_relaxed(rx_msgq|SLIM_RX_MSGQ_TIMEOUT_VAL,
++					ngd->base + NGD_RX_MSGQ_CFG);
++	}
+ 	qcom_slim_ngd_setup(ctrl);
+ 
+ 	time_left = wait_for_completion_timeout(&ctrl->reconf, HZ);
+@@ -1374,6 +1585,14 @@ static int qcom_slim_ngd_qmi_new_server(struct qmi_handle *hdl,
+ 
+ 	complete(&ctrl->qmi_up);
+ 
++	/*
++	 * Without PDR nothing else tells us that the ADSP side is ready when
++	 * the remote processor was already running at probe time: the SLIMbus
++	 * QMI service showing up is that signal.
++	 */
++	if (ctrl->no_pdr)
++		schedule_work(&ctrl->ngd_up_work);
++
+ 	return 0;
+ }
+ 
+@@ -1426,6 +1645,9 @@ static struct platform_driver qcom_slim_ngd_driver;
+ 
+ static const struct of_device_id qcom_slim_ngd_dt_match[] = {
+ 	{
++		.compatible = "qcom,slim-ngd-v1.3.0",
++		.data = &ngd_v1_3_offset_info,
++	},{
+ 		.compatible = "qcom,slim-ngd-v1.5.0",
+ 		.data = &ngd_v1_5_offset_info,
+ 	},{
+@@ -1460,6 +1682,11 @@ static void qcom_slim_ngd_up_worker(struct work_struct *work)
+ 	}
+ 
+ 	mutex_lock(&ctrl->ssr_lock);
++	/* QMI arrival and SSR power-up can both queue us: enable once */
++	if (ctrl->no_pdr && ctrl->qmi.handle) {
++		mutex_unlock(&ctrl->ssr_lock);
++		return;
++	}
+ 	qcom_slim_ngd_enable(ctrl, true);
+ 	mutex_unlock(&ctrl->ssr_lock);
+ }
+@@ -1549,17 +1776,22 @@ static int of_qcom_slim_ngd_register(struct device *parent,
+ 			return ret;
+ 		}
+ 		ngd->pdev->dev.of_node = node;
++		/*
++		 * The NGD probe (run from platform_device_add) can start talking
++		 * to the hardware from QMI callbacks: set the base first.
++		 */
++		ngd->base = ctrl->base + ngd->id * data->offset +
++					(ngd->id - 1) * data->size;
+ 		ctrl->ngd = ngd;
+ 
+ 		ret = platform_device_add(ngd->pdev);
+ 		if (ret) {
++			ctrl->ngd = NULL;
+ 			platform_device_put(ngd->pdev);
+ 			kfree(ngd);
+ 			of_node_put(node);
+ 			return ret;
+ 		}
+-		ngd->base = ctrl->base + ngd->id * data->offset +
+-					(ngd->id - 1) * data->size;
+ 
+ 		return 0;
+ 	}
+@@ -1581,34 +1813,35 @@ static int qcom_slim_ngd_probe(struct platform_device *pdev)
+ 	pm_runtime_set_suspended(dev);
+ 	pm_runtime_enable(dev);
+ 	pm_runtime_get_noresume(dev);
+-	ret = qcom_slim_ngd_qmi_svc_event_init(ctrl);
+-	if (ret) {
+-		dev_err(&pdev->dev, "QMI service registration failed:%d", ret);
+-		return ret;
+-	}
+-
++	/*
++	 * The QMI new_server callback may queue ngd_up_work right away, and
++	 * the master capability (queued on mwq) can follow it immediately:
++	 * everything they use must exist before the QMI lookup is added.
++	 */
+ 	INIT_WORK(&ctrl->m_work, qcom_slim_ngd_master_worker);
+ 	INIT_WORK(&ctrl->ngd_up_work, qcom_slim_ngd_up_worker);
+ 	ctrl->mwq = create_singlethread_workqueue("ngd_master");
+ 	if (!ctrl->mwq) {
+ 		dev_err(&pdev->dev, "Failed to start master worker\n");
+-		ret = -ENOMEM;
+-		goto wq_err;
++		return -ENOMEM;
+ 	}
+ 
+-	return 0;
+-wq_err:
+-	qcom_slim_ngd_qmi_svc_event_deinit(&ctrl->qmi);
+-	if (ctrl->mwq)
++	ret = qcom_slim_ngd_qmi_svc_event_init(ctrl);
++	if (ret) {
++		dev_err(&pdev->dev, "QMI service registration failed:%d", ret);
+ 		destroy_workqueue(ctrl->mwq);
++		ctrl->mwq = NULL;
++		return ret;
++	}
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+ 	struct qcom_slim_ngd_ctrl *ctrl;
++	const struct ngd_reg_offset_data *data;
+ 	int ret;
+ 	struct pdr_service *pds;
+ 
+@@ -1622,6 +1855,20 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
+ 	if (IS_ERR(ctrl->base))
+ 		return PTR_ERR(ctrl->base);
+ 
++	/* must be known before the IRQ is requested */
++	data = of_device_get_match_data(dev);
++	if (data) {
++		ctrl->pio = data->pio;
++		ctrl->ver_base = data->ver_base;
++		ctrl->no_pdr = data->no_pdr;
++	}
++	if (of_property_read_bool(dev->of_node, "qcom,pio-mode"))
++		ctrl->pio = true;
++	of_property_read_u32(dev->of_node, "qcom,ngd-offset", &ctrl->ngd_offset);
++	if (ctrl->ngd_offset)
++		ctrl->ver_base = true;
++	spin_lock_init(&ctrl->tx_buf_lock);
++
+ 	ret = platform_get_irq(pdev, 0);
+ 	if (ret < 0)
+ 		return ret;
+@@ -1651,11 +1898,16 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
+ 
+ 	mutex_init(&ctrl->tx_lock);
+ 	mutex_init(&ctrl->ssr_lock);
+-	spin_lock_init(&ctrl->tx_buf_lock);
+ 	init_completion(&ctrl->reconf);
+ 	init_completion(&ctrl->qmi.qmi_comp);
+ 	init_completion(&ctrl->qmi_up);
+ 
++	if (ctrl->no_pdr) {
++		/* the ADSP has no service registry: see qmi_new_server() */
++		dev_info(dev, "no PDR, bringing the NGD up on SLIMbus QMI arrival\n");
++		goto register_ngd;
++	}
++
+ 	ctrl->pdr = pdr_handle_alloc(slim_pd_status, ctrl);
+ 	if (IS_ERR(ctrl->pdr)) {
+ 		ret = dev_err_probe(dev, PTR_ERR(ctrl->pdr),
+@@ -1669,6 +1921,7 @@ static int qcom_slim_ngd_ctrl_probe(struct platform_device *pdev)
+ 		goto err_pdr_lookup;
+ 	}
+ 
++register_ngd:
+ 	platform_driver_register(&qcom_slim_ngd_driver);
+ 	return of_qcom_slim_ngd_register(dev, ctrl);
+ 
+-- 
+2.43.0
+
