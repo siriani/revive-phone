@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# Carrega o driver de vídeo (msm, DRM) e a luz de fundo (qcom_wled) alguns segundos
+# depois do boot e reinicia a interface. O extlinux leva modprobe.blacklist=msm,qcom_wled
+# (ver install.sh), então o boot não trava na inicialização do DSI.
+description="Revive: carrega msm e qcom_wled depois do boot e reinicia revive-ui"
+: ${REVIVE_VIDEO_DELAY:=15}
+LOG=/var/log/revive-video.log
+
+depend() {
+	need localmount
+	after revive-ui
+}
+
+start() {
+	ebegin "Revive: driver de vídeo em ${REVIVE_VIDEO_DELAY} s"
+	# em segundo plano: o carregamento não segura o boot
+	( sleep "$REVIVE_VIDEO_DELAY"
+	  {
+	    echo "$(date) carregando msm"
+	    if modprobe msm && modprobe qcom_wled; then
+	      echo "$(date) msm e qcom_wled carregados; reiniciando revive-ui"
+	      rc-service revive-ui restart
+	    else
+	      echo "$(date) falhou ao carregar msm/qcom_wled; a interface segue no simplefb"
+	    fi
+	  } >>"$LOG" 2>&1
+	) </dev/null >/dev/null 2>&1 &
+	eend 0
+}
