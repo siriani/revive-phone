@@ -8,6 +8,8 @@ import { MaterialPalette } from "@material";
 export global Tema {
     // escolha do usuário (o AppWindow repassa para Palette.color-scheme)
     in-out property <bool> escuro: true;
+    // esquema de cores escolhido (índice em Esquemas.lista, ui/esquemas.slint)
+    in-out property <int> paleta: 0;
 
     // superfícies (papéis do Material 3)
     out property <color> fundo: MaterialPalette.background;

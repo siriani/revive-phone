@@ -30,6 +30,7 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("musica", "Música", "♫", (40, 60, 90)),
     ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
+    ("ajustes", "Ajustes", "⚙", (70, 74, 84)),
 ];
 
 #[derive(Clone)]
@@ -1250,16 +1251,25 @@ fn bt_acao(ui: &AppWindow, acao: &str, mac: &str) {
 
 // ------------------------------------------------------------------- ligação
 
-/// Tema salvo (/var/lib/revive/tema: "escuro" ou "claro").
+/// Tema salvo (/var/lib/revive/tema: "escuro 0" = modo e esquema de cores).
 const TEMA_FILE: &str = "/var/lib/revive/tema";
 
 pub fn aplicar_tema(ui: &AppWindow, escuro: bool) {
     ui.global::<Tema>().set_escuro(escuro);
     ui.invoke_aplicar_tema();
+    salvar_tema(ui);
+}
+
+fn salvar_tema(ui: &AppWindow) {
+    let t = ui.global::<Tema>();
+    let _ = std::fs::write(TEMA_FILE, format!("{} {}", if t.get_escuro() { "escuro" } else { "claro" }, t.get_paleta()));
 }
 
 pub fn ligar(ui: &AppWindow) {
-    let escuro = std::fs::read_to_string(TEMA_FILE).map(|s| s.trim() != "claro").unwrap_or(true);
+    let salvo = std::fs::read_to_string(TEMA_FILE).unwrap_or_default();
+    let mut partes = salvo.split_whitespace();
+    let escuro = partes.next() != Some("claro");
+    ui.global::<Tema>().set_paleta(partes.next().and_then(|p| p.parse().ok()).unwrap_or(0));
     aplicar_tema(ui, escuro);
     ui.set_musica_configurada(api().configurado());
     let apps: Vec<AppInfo> = APPS
@@ -1319,6 +1329,20 @@ pub fn ligar(ui: &AppWindow) {
                 _ => "telefone",
             });
             abrir_teclado(&ui, Modo::Tg(passo.into()));
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_ajustes_tema(move |escuro| {
+        if let Some(ui) = f.upgrade() {
+            aplicar_tema(&ui, escuro);
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_ajustes_paleta(move |i| {
+        if let Some(ui) = f.upgrade() {
+            ui.global::<Tema>().set_paleta(i);
+            ui.invoke_aplicar_tema();
+            salvar_tema(&ui);
         }
     });
     ui.on_tg_abrir(|i| tg_cmd(telegram::Cmd::Abrir(i.max(0) as usize)));

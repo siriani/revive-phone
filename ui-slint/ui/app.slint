@@ -2,9 +2,11 @@ import "fontes/DejaVuSans.ttf";
 import "fontes/DejaVuSansBold-Familia.ttf";
 import { Tema } from "tema.slint";
 export { Tema }
+import { Esquemas } from "esquemas.slint";
+import { MenuInner } from "../material/ui/components/menu.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
-         MaterialTypography } from "@material";
+         MaterialTypography, MaterialPalette, MenuItem } from "@material";
 
 // Revive: telas da interface (Slint). Paisagem 1280x720, desenhada pelo
 // renderizador por software direto no framebuffer, só nas áreas que mudam.
@@ -726,6 +728,97 @@ component TelaFoto inherits Rectangle {
     }
 }
 
+// ------------------------------------------------- molde padrão de app
+
+// Toda tela de app começa com esta barra (AppBar do Material): voltar + título + ação.
+component BarraApp inherits Rectangle {
+    in property <string> titulo;
+    in property <image> acao;            // ícone da ação da direita (vazio = sem ação)
+    callback voltar();
+    callback acionar();
+    x: 0; y: 0; width: 1280px; height: barra.min-height;
+    barra := AppBar {
+        width: parent.width;
+        title: root.titulo;
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        trailing_button: { icon: root.acao, enabled: root.acao.width > 0 };
+        leading_button_clicked => { root.voltar(); }
+        trailing_button_clicked => { root.acionar(); }
+    }
+}
+
+// ------------------------------------------------------------------ ajustes
+
+component CartaoOpcao inherits Rectangle {
+    in property <string> titulo;
+    in property <string> sub;
+    in property <image> icone;
+    in property <bool> ativo;
+    callback escolher();
+    border-radius: Tema.raio-g;
+    background: toque.pressed ? Tema.superficie-alta : (ativo ? Tema.destaque-suave : Tema.superficie);
+    border-width: ativo ? 3px : 1px;
+    border-color: ativo ? Tema.destaque : Tema.contorno;
+    Image { x: 32px; y: 32px; width: 72px; height: 72px; source: root.icone;
+            colorize: root.ativo ? Tema.sobre-destaque-suave : Tema.texto; }
+    Text { x: 32px; y: 124px; text: root.titulo; font-size: Tema.texto-titulo; font-family: "DejaVu Sans Bold";
+           color: root.ativo ? Tema.sobre-destaque-suave : Tema.texto; }
+    Text { x: 32px; y: 172px; width: parent.width - 64px; text: root.sub; font-size: Tema.texto-corpo;
+           color: Tema.texto-sec; wrap: word-wrap; }
+    if root.ativo: Rectangle {
+        x: parent.width - 76px; y: 28px; width: 48px; height: 48px; border-radius: 24px; background: Tema.destaque;
+        Image { width: 32px; height: 32px; source: @image-url("icones/check.svg"); colorize: Tema.sobre-destaque; }
+    }
+    toque := TouchArea { clicked => { root.escolher(); } }
+}
+
+component TelaAjustes inherits Rectangle {
+    callback voltar();
+    callback tema(bool);
+    callback paleta(int);
+    property <bool> menu-aberto;
+    background: Tema.fundo;
+    BarraApp { titulo: "Ajustes"; voltar => { root.voltar(); } }
+    // como na galeria do Material: paleta (esquemas de cor) e sol/lua (claro/escuro)
+    IconButton {
+        x: 1080px; y: 18px; icon: @image-url("icones/palette.svg");
+        clicked => { root.menu-aberto = !root.menu-aberto; }
+    }
+    IconButton {
+        x: 1170px; y: 18px;
+        icon: Tema.escuro ? @image-url("icones/light_mode.svg") : @image-url("icones/dark_mode.svg");
+        clicked => { root.tema(!Tema.escuro); }
+    }
+    Text { x: 48px; y: 120px; text: "Aparência"; font-size: Tema.texto-titulo; color: Tema.destaque;
+           font-family: "DejaVu Sans Bold"; }
+    CartaoOpcao {
+        x: 48px; y: 180px; width: 580px; height: 260px;
+        titulo: "Escuro"; sub: "Fundo escuro, confortável à noite e mais econômico.";
+        icone: @image-url("icones/dark_mode.svg"); ativo: Tema.escuro;
+        escolher => { root.tema(true); }
+    }
+    CartaoOpcao {
+        x: 652px; y: 180px; width: 580px; height: 260px;
+        titulo: "Claro"; sub: "Fundo claro, melhor de dia e em lugares iluminados.";
+        icone: @image-url("icones/light_mode.svg"); ativo: !Tema.escuro;
+        escolher => { root.tema(false); }
+    }
+    Text { x: 48px; y: 480px; width: 1184px; font-size: Tema.texto-corpo; color: Tema.texto-sec; wrap: word-wrap;
+           text: "Todos os apps usam a mesma central de design (cores, textos e formas do Material 3). A escolha vale para o sistema inteiro e fica salva."; }
+    // menu de esquemas de cor (MenuInner da biblioteca, sem janela popup)
+    if root.menu-aberto: TouchArea { clicked => { root.menu-aberto = false; } }
+    if root.menu-aberto: MenuInner {
+        x: 860px; y: 100px; width: 380px;
+        current_index: Tema.paleta;
+        items: [
+            { text: Esquemas.nomes[0], enabled: true }, { text: Esquemas.nomes[1], enabled: true },
+            { text: Esquemas.nomes[2], enabled: true }, { text: Esquemas.nomes[3], enabled: true },
+            { text: Esquemas.nomes[4], enabled: true }, { text: Esquemas.nomes[5], enabled: true },
+        ];
+        activated(i) => { root.menu-aberto = false; root.paleta(i); }
+    }
+}
+
 // ------------------------------------------------- configuração do Navidrome
 
 component TelaConfMusica inherits Rectangle {
@@ -893,6 +986,8 @@ export component AppWindow inherits Window {
     callback mus-navegar(string);
     callback album-tocar(int);
     callback album-aleatorio();
+    callback ajustes-tema(bool);
+    callback ajustes-paleta(int);
     in property <[TgConversa]> tg-conversas;
     in property <image> tg-foto;
     in property <bool> tg-foto-carregando;
@@ -900,7 +995,10 @@ export component AppWindow inherits Window {
     callback tg-abrir(int);
     callback tg-atualizar();
     // o Rust chama ao trocar Tema.escuro (Palette guia a MaterialPalette)
-    public function aplicar-tema() { Palette.color-scheme = Tema.escuro ? ColorScheme.dark : ColorScheme.light; }
+    public function aplicar-tema() {
+        Palette.color-scheme = Tema.escuro ? ColorScheme.dark : ColorScheme.light;
+        MaterialPalette.schemes = Esquemas.lista[Tema.paleta];
+    }
     init => { root.aplicar-tema(); }
     in property <string> tg-mensagem;
     in property <string> tg-botao;
@@ -1011,6 +1109,12 @@ export component AppWindow inherits Window {
             width: 1280px; height: 720px; mensagem: root.tg-mensagem; botao: root.tg-botao;
             digitar => { root.tg-digitar(); }
             voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "ajustes": TelaAjustes {
+            width: 1280px; height: 720px;
+            voltar => { root.ir("inicio"); }
+            tema(e) => { root.ajustes-tema(e); }
+            paleta(i) => { root.ajustes-paleta(i); }
         }
         if root.tela == "tg-conversas": TelaTgConversas {
             width: 1280px; height: 720px; conversas: root.tg-conversas; mensagem: root.tg-mensagem;

@@ -64,7 +64,8 @@ export global MaterialPalette {
     out property <float> disable_opacity: 38%;
     out property <color> background_modal: #000000.with_alpha(50%);
 
-    in property <MaterialSchemes> schemes: {
+    // Revive: in_out (era in) para o tema poder trocar o esquema de cores pelo Slint
+    in_out property <MaterialSchemes> schemes: {
         light: {
             primary: rgb(68, 94, 145),
             surfaceTint: rgb(68, 94, 145),
