@@ -11,6 +11,13 @@ What is planned, roughly in order. Device-specific items refer to the Motorola M
 - **Audio** — the phone has no sound card under mainline yet: the ADSP (QDSP6) is not
   enabled and the WCD9306 codec has no mainline driver. Porting it would enable the
   internal microphone (voice recorder app), the loudspeaker and the headphone jack.
+- **Cameras** — the MSM8226 camera subsystem (CAMSS) is not supported in mainline; it is
+  close to the MSM8916 one, so the port would start from there, using the vendor device
+  tree for clocks, regulators and GPIOs.
+  - *Front (MT9M114, 1.2 MP)*: first target — the sensor already has a mainline driver
+    and outputs processed YUV, so CAMSS is the only missing piece.
+  - *Rear (AR0543, 5 MP)*: also needs a new sensor driver and software processing of the
+    raw Bayer frames (e.g. libcamera's software ISP).
 - **CPU at 1.19 GHz** — mainline stops at 787 MHz because the OPP table has no voltages;
   needs CPR/voltage scaling on the APC regulator, then a stress test.
 
