@@ -1,0 +1,461 @@
+// Revive: tela "Meshtastic" (Slint + Material 3). Paisagem 1280x720, renderizador por
+// software. À esquerda a lista de nós da malha; à direita o canal com as mensagens em
+// bolhas e a barra de digitação. Tudo com x/y explícitos (sem layouts de posição).
+// Fontes só 18/21/24/26/34px. Os textos dinâmicos usam os caracteres dos Texts
+// invisíveis no fim da tela (só caracteres literais entram na fonte embutida).
+
+import { AppBar } from "@material";
+import { Tema } from "tema.slint";
+
+export struct NoMesh {
+    num: int,
+    nome: string,
+    curto: string,
+    bateria: string,
+    snr: string,
+    visto: string,
+    online: bool,
+}
+
+export struct MsgMesh {
+    autor: string,
+    texto: string,
+    hora: string,
+    minha: bool,
+}
+
+// Botão de ícone próprio (mesmo desenho de inicio_ui.slint / clima_ui.slint), 72x72
+// com ícone tingido.
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    in property <bool> ativo: true;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : #00000000;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.ativo ? root.cor : root.cor.with-alpha(0.3);
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.ativo;
+        clicked => { root.clicado(); }
+    }
+}
+
+// ---------------------------------------------------------------- mesh
+
+export component TelaMesh inherits Rectangle {
+    in property <string> estado;
+    in property <[NoMesh]> nos;
+    in property <[MsgMesh]> mensagens;
+    in property <string> canal;
+    in property <string> rascunho;
+
+    callback voltar();
+    callback digitar();
+    callback enviar();
+    callback abrir-no(int);
+    callback configurar();
+
+    // "erro..." e qualquer estado desconhecido contam como falha de conexão.
+    property <bool> com-erro:
+        root.estado != "" && root.estado != "conectado" && root.estado != "conectando";
+    property <bool> vazio:
+        root.com-erro || (root.nos.length == 0 && root.mensagens.length == 0);
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    // barra superior (y 0, altura 96)
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: @tr("Meshtastic");
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    // chip de estado: ponto colorido + texto
+    Rectangle {
+        x: 920px;
+        y: 28px;
+        width: 252px;
+        height: 40px;
+        border-radius: 20px;
+        background: Tema.superficie;
+        border-width: 1px;
+        border-color: Tema.contorno;
+        clip: true;
+
+        Rectangle {
+            x: 16px;
+            y: 14px;
+            width: 12px;
+            height: 12px;
+            border-radius: 6px;
+            background: root.estado == "conectado" ? Tema.sucesso
+                : (root.estado == "conectando" ? Tema.aviso : Tema.erro);
+        }
+        Text {
+            x: 38px;
+            y: 0px;
+            width: 198px;
+            height: 40px;
+            text: root.estado;
+            font-size: 21px;
+            color: Tema.texto-sec;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+    }
+
+    // configuração (engrenagem) no canto direito da barra
+    BotaoIcone {
+        x: 1184px;
+        y: 12px;
+        icone: @image-url("icones/settings.svg");
+        cor: Tema.texto;
+        clicado => { root.configurar(); }
+    }
+
+    // conteúdo normal (some no estado vazio/erro)
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 720px;
+        background: #00000000;
+        visible: !root.vazio;
+
+        // ------------------------------------------ coluna esquerda (x 0..420)
+        Text {
+            x: 24px;
+            y: 106px;
+            width: 200px;
+            height: 28px;
+            text: @tr("Nós");
+            font-size: 21px;
+            color: Tema.texto-sec;
+            vertical-alignment: center;
+        }
+        Flickable {
+            x: 0px;
+            y: 140px;
+            width: 420px;
+            height: 564px;
+            interactive: true;
+            content-width: self.width;
+            content-height: max(self.height, root.nos.length * 88px);
+
+            for n[i] in root.nos : Rectangle {
+                x: 8px;
+                y: i * 88px;
+                width: 396px;
+                height: 88px;
+                border-radius: 16px;
+                background: toque-linha.pressed ? Tema.superficie-alta : #00000000;
+
+                // círculo com o identificador curto (4 letras)
+                Rectangle {
+                    x: 8px;
+                    y: 16px;
+                    width: 56px;
+                    height: 56px;
+                    border-radius: 28px;
+                    background: Tema.destaque-suave;
+
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.height;
+                        text: n.curto;
+                        font-size: 21px;
+                        font-family: "DejaVu Sans Bold";
+                        color: Tema.sobre-destaque-suave;
+                        overflow: elide;
+                        wrap: no-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    x: 76px;
+                    y: 12px;
+                    width: 246px;
+                    height: 34px;
+                    text: n.nome;
+                    font-size: 26px;
+                    color: Tema.texto;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+                Text {
+                    x: 76px;
+                    y: 48px;
+                    width: 268px;
+                    height: 28px;
+                    text: "\{n.bateria} · SNR \{n.snr} · \{n.visto}";
+                    font-size: 21px;
+                    color: Tema.texto-sec;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+
+                // ponto verde: nó online
+                Rectangle {
+                    x: 352px;
+                    y: 20px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 6px;
+                    background: Tema.sucesso;
+                    visible: n.online;
+                }
+
+                // divisor fino entre os nós
+                Rectangle {
+                    x: 8px;
+                    y: 87px;
+                    width: 396px;
+                    height: 1px;
+                    background: Tema.contorno;
+                    visible: i < root.nos.length - 1;
+                }
+
+                toque-linha := TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.abrir-no(i); }
+                }
+            }
+        }
+
+        // separador entre as duas colunas
+        Rectangle {
+            x: 420px;
+            y: 108px;
+            width: 1px;
+            height: 584px;
+            background: Tema.contorno;
+        }
+
+        // ------------------------------------------ coluna direita (x 436..1264)
+        // título do canal
+        Text {
+            x: 436px;
+            y: 106px;
+            width: 828px;
+            height: 42px;
+            text: root.canal;
+            font-size: 26px;
+            font-family: "DejaVu Sans Bold";
+            color: Tema.texto;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            x: 436px;
+            y: 158px;
+            width: 828px;
+            height: 1px;
+            background: Tema.contorno;
+        }
+
+        // mensagens em bolhas; começa rolado para o fim da conversa
+        Flickable {
+            x: 436px;
+            y: 172px;
+            width: 828px;
+            height: 408px;
+            interactive: true;
+            content-width: self.width;
+            content-height: max(self.height, col.preferred-height);
+            viewport-y: min(0px, self.height - col.preferred-height);
+
+            col := VerticalLayout {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                spacing: 10px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+
+                for m[i] in root.mensagens : HorizontalLayout {
+                    alignment: m.minha ? end : start;
+
+                    Rectangle {
+                        max-width: 640px;
+                        border-radius: 22px;
+                        background: m.minha ? Tema.destaque-suave : Tema.superficie;
+                        clip: true;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 6px;
+
+                            // autor em cima (só quando existe)
+                            if m.autor != "" : Text {
+                                text: m.autor;
+                                font-size: 21px;
+                                font-family: "DejaVu Sans Bold";
+                                color: m.minha ? Tema.sobre-destaque-suave : Tema.destaque;
+                                overflow: elide;
+                                wrap: no-wrap;
+                            }
+                            if m.texto != "" : Text {
+                                text: m.texto;
+                                wrap: word-wrap;
+                                font-size: 26px;
+                                color: m.minha ? Tema.sobre-destaque-suave : Tema.texto;
+                            }
+                            Text {
+                                text: m.hora;
+                                font-size: 18px;
+                                horizontal-alignment: right;
+                                color: m.minha ? Tema.sobre-destaque-suave.with-alpha(0.7) : Tema.texto-sec;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // barra de digitação (toque abre o teclado do sistema)
+        Rectangle {
+            x: 436px;
+            y: 600px;
+            width: 716px;
+            height: 72px;
+            border-radius: 36px;
+            background: toque-campo.pressed ? Tema.superficie-alta : Tema.superficie;
+            clip: true;
+
+            Text {
+                x: 28px;
+                y: 0px;
+                width: 660px;
+                height: 72px;
+                text: root.rascunho != "" ? root.rascunho : @tr("Toque para escrever");
+                font-size: 26px;
+                color: root.rascunho != "" ? Tema.texto : Tema.texto-sec;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+            toque-campo := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.digitar(); }
+            }
+        }
+
+        // enviar
+        Rectangle {
+            x: 1164px;
+            y: 600px;
+            width: 72px;
+            height: 72px;
+            border-radius: 36px;
+            background: toque-enviar.pressed ? Tema.destaque.darker(15%) : Tema.destaque;
+
+            Image {
+                x: 18px;
+                y: 18px;
+                width: 36px;
+                height: 36px;
+                source: @image-url("icones/send.svg");
+                colorize: Tema.sobre-destaque;
+                image-fit: contain;
+            }
+            toque-enviar := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.enviar(); }
+            }
+        }
+    }
+
+    // estado vazio/erro: mensagem centralizada e botão para configurar a malha
+    Text {
+        x: 240px;
+        y: 240px;
+        width: 800px;
+        height: 140px;
+        text: root.com-erro && root.estado != "" ? root.estado : @tr("Nenhum nó ou mensagem ainda");
+        font-size: 34px;
+        color: Tema.texto-sec;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        visible: root.vazio;
+    }
+    Rectangle {
+        x: 490px;
+        y: 420px;
+        width: 300px;
+        height: 72px;
+        border-radius: 36px;
+        background: toque-config.pressed ? Tema.destaque.darker(15%) : Tema.destaque;
+        clip: true;
+        visible: root.vazio;
+
+        Text {
+            x: 0px;
+            y: 0px;
+            width: 300px;
+            height: 72px;
+            text: @tr("Configurar");
+            font-size: 26px;
+            color: Tema.sobre-destaque;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        toque-config := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.configurar(); }
+        }
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos: a fonte só leva os glifos dos textos literais. Estes Texts
+    // invisíveis cobrem os textos dinâmicos, em cada tamanho e família usados.
+    Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 34px; }
+    Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 26px; }
+    Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 26px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 21px; }
+    Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 21px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 18px; }
+}

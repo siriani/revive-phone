@@ -10,11 +10,11 @@ use std::time::Duration;
 use serde_json::Value;
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
-use crate::{clima, i18n, inicio, sistema};
+use crate::{clima, i18n, inicio, loja, mesh, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppOrdem, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppLojaUi, AppOrdem, MsgMesh, NoMesh, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -33,6 +33,8 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
     ("clima", "Clima", "☀", (176, 120, 20)),
     ("doom", "DOOM II", "☠", (150, 30, 20)),
+    ("mesh", "Mesh", "◉", (30, 120, 70)),
+    ("loja", "Loja", "↓", (40, 110, 90)),
     ("ajustes", "Ajustes", "⚙", (70, 74, 84)),
 ];
 
@@ -74,6 +76,8 @@ enum Modo {
     Tg(String),
     /// nome da cidade do app Clima
     Cidade,
+    /// Meshtastic: "mensagem" ou "host"
+    Mesh(String),
 }
 
 struct Estado {
@@ -398,6 +402,8 @@ fn atualizar_teclado(ui: &AppWindow) {
             Modo::Campo(_) => i18n::t("OK"),
             Modo::Tg(_) => i18n::t("Enviar"),
             Modo::Cidade => i18n::t("Buscar"),
+            Modo::Mesh(c) if c == "host" => i18n::t("OK"),
+            Modo::Mesh(_) => i18n::t("Enviar"),
         };
         let mostrado = if senha && e.ocultar { "•".repeat(e.texto.chars().count()) } else { e.texto.clone() };
         let ini = mostrado.chars().count().saturating_sub(30);
@@ -406,6 +412,8 @@ fn atualizar_teclado(ui: &AppWindow) {
             Modo::Senha(s) => i18n::tf("senha de {}", &[&curto(s, 18)]),
             Modo::Busca => i18n::t("buscar música"),
             Modo::Cidade => i18n::t("nome da cidade"),
+            Modo::Mesh(c) if c == "host" => i18n::t("IP do nó Meshtastic (Wi-Fi)"),
+            Modo::Mesh(_) => i18n::t("mensagem"),
             Modo::Campo(c) => {
                 let rotulo = i18n::t(c);
                 i18n::tf("{} do Navidrome", &[&rotulo])
@@ -444,6 +452,7 @@ fn confirmar(ui: &AppWindow) {
             Modo::Campo(c) => Modo::Campo(c.clone()),
             Modo::Tg(c) => Modo::Tg(c.clone()),
             Modo::Cidade => Modo::Cidade,
+            Modo::Mesh(c) => Modo::Mesh(c.clone()),
         };
         (m, e.texto.clone())
     });
@@ -451,6 +460,7 @@ fn confirmar(ui: &AppWindow) {
         Modo::Senha(ssid) => conectar_wifi(ui, ssid, texto),
         Modo::Busca => buscar(ui, texto.trim().to_string()),
         Modo::Cidade => buscar_cidade(ui, texto.trim().to_string()),
+        Modo::Mesh(c) => mesh_teclado(ui, &c, texto.trim().to_string()),
         Modo::Tg(c) => {
             let v = texto.trim().to_string();
             if v.is_empty() {
@@ -493,7 +503,9 @@ fn cancelar_teclado(ui: &AppWindow) {
         Modo::Tg(c) if c == "mensagem" => 3,
         Modo::Tg(_) => 4,
         Modo::Cidade => 5,
+        Modo::Mesh(_) => 6,
     }) {
+        6 => ui.set_tela(ss("mesh")),
         5 => ui.set_tela(ss("clima-cidade")),
         0 => ir(ui, "wifi"),
         1 => ui.set_tela(ss("musica")),
@@ -579,6 +591,12 @@ fn ir(ui: &AppWindow, tela: &str) {
     }
     if tela == "clima" {
         return abrir_clima(ui);
+    }
+    if tela == "mesh" {
+        abrir_mesh(ui);
+    }
+    if tela == "loja" {
+        abrir_loja(ui);
     }
     if tela == "fila" {
         carregar_fila(ui);
@@ -1362,6 +1380,195 @@ fn icone_app(id: &str) -> Option<Image> {
         .map(Image::from_rgba8)
 }
 
+thread_local! {
+    static MESH_TX: RefCell<Option<std::sync::mpsc::Sender<mesh::Cmd>>> = RefCell::default();
+    static MESH_NOS: RefCell<Vec<mesh::No>> = RefCell::default();
+    static MESH_MSGS: RefCell<Vec<mesh::Msg>> = RefCell::default();
+}
+
+fn agora_epoch() -> u32 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
+}
+
+/// "há 3 min", "há 2 h" a partir do last_heard do nó.
+fn ha(epoch: u32) -> String {
+    let d = agora_epoch().saturating_sub(epoch);
+    if d < 60 {
+        i18n::t("agora")
+    } else if d < 3600 {
+        i18n::tf("há {} min", &[&(d / 60).to_string()])
+    } else if d < 86400 {
+        i18n::tf("há {} h", &[&(d / 3600).to_string()])
+    } else {
+        i18n::tf("há {} d", &[&(d / 86400).to_string()])
+    }
+}
+
+fn mesh_mostrar(ui: &AppWindow) {
+    let nos: Vec<NoMesh> = MESH_NOS.with_borrow(|v| {
+        let mut v = v.clone();
+        v.sort_by_key(|n| std::cmp::Reverse(n.visto.unwrap_or(0)));
+        v.iter()
+            .map(|n| NoMesh {
+                num: n.num as i32,
+                nome: ss(if n.nome.is_empty() { format!("!{:08x}", n.num) } else { n.nome.clone() }),
+                curto: ss(if n.curto.is_empty() { format!("{:04x}", n.num & 0xffff) } else { n.curto.clone() }),
+                bateria: ss(n.bateria.map(|b| format!("{b}%")).unwrap_or_else(|| "—".into())),
+                snr: ss(n.snr.map(|s| format!("{s:.1}")).unwrap_or_else(|| "—".into())),
+                visto: ss(n.visto.map(ha).unwrap_or_default()),
+                online: n.visto.map(|t| agora_epoch().saturating_sub(t) < 900).unwrap_or(false),
+            })
+            .collect()
+    });
+    ui.set_mesh_nos(ModelRc::new(VecModel::from(nos)));
+    let msgs: Vec<MsgMesh> = MESH_MSGS.with_borrow(|v| {
+        v.iter()
+            .rev()
+            .take(100)
+            .rev()
+            .map(|m| MsgMesh {
+                autor: ss(if m.minha { i18n::t("Eu") } else { m.de_nome.clone() }),
+                texto: ss(m.texto.clone()),
+                hora: ss(chrono::DateTime::from_timestamp(m.hora as i64, 0)
+                    .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                    .unwrap_or_default()),
+                minha: m.minha,
+            })
+            .collect()
+    });
+    ui.set_mesh_msgs(ModelRc::new(VecModel::from(msgs)));
+}
+
+/// App Meshtastic: liga a conexão TCP com o nó (uma vez) e mostra nós e mensagens.
+fn abrir_mesh(ui: &AppWindow) {
+    if !mesh::configurado() {
+        ui.set_mesh_estado(ss(i18n::t("erro: configure o IP do nó")));
+        mesh_mostrar(ui);
+        return;
+    }
+    if MESH_TX.with_borrow(|t| t.is_some()) {
+        mesh_mostrar(ui);
+        return;
+    }
+    MESH_MSGS.with_borrow_mut(|v| *v = mesh::historico());
+    let fraca = ui.as_weak();
+    let tx = mesh::iniciar(move |ev| {
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            match ev {
+                mesh::Evento::Estado(s) => ui.set_mesh_estado(ss(s)),
+                mesh::Evento::Nos(n) => MESH_NOS.with_borrow_mut(|v| *v = n),
+                mesh::Evento::Mensagem(m) => MESH_MSGS.with_borrow_mut(|v| v.push(m)),
+                mesh::Evento::Eu(_) => {}
+            }
+            mesh_mostrar(&ui);
+        });
+    });
+    let _ = tx.send(mesh::Cmd::Conectar);
+    MESH_TX.with_borrow_mut(|t| *t = Some(tx));
+    mesh_mostrar(ui);
+}
+
+fn mesh_teclado(ui: &AppWindow, campo: &str, texto: String) {
+    ui.set_tela(ss("mesh"));
+    if campo == "host" {
+        if texto.is_empty() {
+            return;
+        }
+        let _ = std::fs::write("/etc/revive/mesh.conf", format!("host={texto}\n"));
+        match MESH_TX.with_borrow(|t| t.clone()) {
+            Some(tx) => {
+                let _ = tx.send(mesh::Cmd::Conectar);
+            }
+            None => abrir_mesh(ui),
+        }
+    } else {
+        ui.set_mesh_rascunho(ss(texto));
+    }
+}
+
+thread_local! {
+    static LOJA: RefCell<Vec<loja::AppLoja>> = RefCell::default();
+}
+
+fn loja_ui(a: &loja::AppLoja) -> AppLojaUi {
+    AppLojaUi {
+        id: ss(a.id.clone()),
+        nome: ss(a.nome.clone()),
+        descricao: ss(a.descricao.clone()),
+        autor: ss(a.autor.clone()),
+        icone: ss(a.icone.clone()),
+        cor: Color::from_rgb_u8(a.cor.0, a.cor.1, a.cor.2),
+        categoria: ss(a.categoria.clone()),
+        instalado: a.instalado,
+        requer: ss(a.requer.join(", ")),
+    }
+}
+
+/// Loja: baixa o catálogo (index.json no GitHub) em segundo plano.
+fn abrir_loja(ui: &AppWindow) {
+    ui.set_loja_carregando(true);
+    ui.set_loja_msg(ss(""));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let r = loja::catalogo();
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            ui.set_loja_carregando(false);
+            match r {
+                Ok(l) => {
+                    let v: Vec<AppLojaUi> = l.iter().map(loja_ui).collect();
+                    ui.set_loja_apps(ModelRc::new(VecModel::from(v)));
+                    if l.is_empty() {
+                        ui.set_loja_msg(ss(i18n::t("Nenhum app no catálogo")));
+                    }
+                    LOJA.with_borrow_mut(|g| *g = l);
+                }
+                Err(e) => ui.set_loja_msg(ss(e)),
+            }
+        });
+    });
+}
+
+/// Depois de instalar/remover um app de manifesto: refaz a lista de apps do início.
+fn recarregar_apps(ui: &AppWindow) {
+    let todos = todos_apps();
+    let ids: Vec<String> = todos.iter().map(|a| a.id.to_string()).collect();
+    ORDEM.with_borrow_mut(|o| *o = inicio::carregar(&ids));
+    TODOS_APPS.with_borrow_mut(|t| *t = todos);
+    aplicar_ordem(ui);
+}
+
+/// Instala ou remove o app aberto na loja.
+fn loja_acao(ui: &AppWindow, instalar: bool) {
+    let Some(a) = LOJA.with_borrow(|g| g.iter().find(|x| x.id == ui.get_loja_app().id.as_str()).cloned()) else {
+        return;
+    };
+    ui.set_loja_ocupado(true);
+    ui.set_loja_app_msg(ss(""));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let r = if instalar { loja::instalar(&a) } else { loja::remover(&a.id) };
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            ui.set_loja_ocupado(false);
+            match r {
+                Ok(()) => {
+                    let mut a = a;
+                    a.instalado = instalar;
+                    ui.set_loja_app(loja_ui(&a));
+                    LOJA.with_borrow_mut(|g| {
+                        if let Some(x) = g.iter_mut().find(|x| x.id == a.id) {
+                            x.instalado = instalar;
+                        }
+                    });
+                    let v: Vec<AppLojaUi> = LOJA.with_borrow(|g| g.iter().map(loja_ui).collect());
+                    ui.set_loja_apps(ModelRc::new(VecModel::from(v)));
+                    recarregar_apps(&ui);
+                }
+                Err(e) => ui.set_loja_app_msg(ss(format!("erro: {e}"))),
+            }
+        });
+    });
+}
+
 /// Apps nativos e de manifesto, na ordem padrão.
 fn todos_apps() -> Vec<AppInfo> {
     APPS.iter()
@@ -1603,6 +1810,37 @@ pub fn ligar(ui: &AppWindow) {
         f.upgrade().iter().for_each(aplicar_ordem);
     });
     ligar_painel(ui);
+    let f = ui.as_weak();
+    ui.on_mesh_digitar(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Mesh("mensagem".into()))));
+    let f = ui.as_weak();
+    ui.on_mesh_configurar(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Mesh("host".into()))));
+    let f = ui.as_weak();
+    ui.on_mesh_enviar(move || {
+        let Some(ui) = f.upgrade() else { return };
+        let texto = ui.get_mesh_rascunho().to_string();
+        if texto.trim().is_empty() {
+            return abrir_teclado(&ui, Modo::Mesh("mensagem".into()));
+        }
+        if let Some(tx) = MESH_TX.with_borrow(|t| t.clone()) {
+            let _ = tx.send(mesh::Cmd::Enviar { texto, para: None, canal: 0 });
+            ui.set_mesh_rascunho(ss(""));
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_loja_atualizar(move || f.upgrade().iter().for_each(abrir_loja));
+    let f = ui.as_weak();
+    ui.on_loja_abrir(move |i| {
+        let Some(ui) = f.upgrade() else { return };
+        if let Some(a) = LOJA.with_borrow(|g| g.get(i.max(0) as usize).cloned()) {
+            ui.set_loja_app(loja_ui(&a));
+            ui.set_loja_app_msg(ss(""));
+            ui.set_tela(ss("loja-app"));
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_loja_instalar(move || f.upgrade().iter().for_each(|ui| loja_acao(ui, true)));
+    let f = ui.as_weak();
+    ui.on_loja_remover(move || f.upgrade().iter().for_each(|ui| loja_acao(ui, false)));
     let f = ui.as_weak();
     ui.on_cl_atualizar(move || f.upgrade().iter().for_each(abrir_clima));
     let f = ui.as_weak();

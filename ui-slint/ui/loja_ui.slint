@@ -1,0 +1,427 @@
+// Revive: Loja de apps (Slint + Material 3). Paisagem 1280x720, renderizador por software.
+// TelaLoja: grade de 3 colunas com os apps disponíveis (rolagem vertical).
+// TelaAppLoja: detalhe do app, com instalar/abrir/remover.
+// Tudo com x/y explícitos (sem layouts). Fontes só 16/21/24/26/34/44/48/110px.
+// Os textos dinâmicos usam os caracteres dos Texts invisíveis no fim de cada tela.
+
+import { AppBar, FilledButton, OutlineButton } from "@material";
+import { Tema } from "tema.slint";
+
+// App da loja, como o Rust preenche (nome, descrição, autor e ícone vêm de lá).
+export struct AppLojaUi {
+    id: string,
+    nome: string,
+    descricao: string,
+    autor: string,
+    icone: string,
+    cor: color,
+    categoria: string,
+    instalado: bool,
+    requer: string,
+}
+
+// Botão de ícone próprio (mesmo desenho do inicio_ui.slint), 72x72 com ícone tingido.
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    in property <bool> ativo: true;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : #00000000;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.ativo ? root.cor : root.cor.with-alpha(0.3);
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.ativo;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Cartão de app na grade: 392x150, círculo de 88px com o caractere do ícone.
+component CartaoLoja inherits Rectangle {
+    in property <AppLojaUi> app;
+    callback aberto();
+
+    width: 392px;
+    height: 150px;
+    border-radius: Tema.raio-g;
+    background: Tema.superficie;
+    clip: true;
+
+    // ícone: caractere branco num círculo na cor do app (como no lançador)
+    Rectangle {
+        x: 20px;
+        y: 31px;
+        width: 88px;
+        height: 88px;
+        border-radius: 44px;
+        background: root.app.cor;
+        clip: true;
+
+        Text {
+            x: 0px;
+            y: 0px;
+            width: 88px;
+            height: 88px;
+            text: root.app.icone;
+            font-size: 48px;
+            color: #ffffffff;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    Text {
+        x: 124px;
+        y: 12px;
+        width: 248px;
+        height: 42px;
+        text: root.app.nome;
+        font-size: 34px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 124px;
+        y: 54px;
+        width: 136px;
+        height: 28px;
+        text: root.app.categoria;
+        font-size: 21px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    // selo "Instalado" (só quando o app já está no aparelho)
+    Rectangle {
+        x: 272px;
+        y: 54px;
+        width: 100px;
+        height: 26px;
+        border-radius: 13px;
+        background: Tema.destaque-suave;
+        visible: root.app.instalado;
+
+        Image {
+            x: 6px;
+            y: 5px;
+            width: 16px;
+            height: 16px;
+            source: @image-url("icones/check_circle.svg");
+            colorize: Tema.sobre-destaque-suave;
+            image-fit: contain;
+        }
+        Text {
+            x: 28px;
+            y: 0px;
+            width: 66px;
+            height: 26px;
+            text: @tr("Instalado");
+            font-size: 16px;
+            color: Tema.sobre-destaque-suave;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+    }
+
+    // descrição curta: no máximo 2 linhas, com reticências
+    Text {
+        x: 124px;
+        y: 88px;
+        width: 248px;
+        height: 54px;
+        text: root.app.descricao;
+        font-size: 21px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: word-wrap;
+    }
+
+    TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.aberto(); }
+    }
+}
+
+// ---------------------------------------------------------------- loja
+
+export component TelaLoja inherits Rectangle {
+    in property <[AppLojaUi]> apps;
+    in property <string> mensagem;
+    in property <bool> carregando;
+
+    callback voltar();
+    callback abrir(int);
+    callback atualizar();
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: @tr("Loja de apps");
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    BotaoIcone {
+        x: 1184px;
+        y: 12px;
+        icone: @image-url("icones/refresh.svg");
+        cor: Tema.texto;
+        ativo: !root.carregando;
+        clicado => { root.atualizar(); }
+    }
+
+    Text {
+        x: 840px;
+        y: 28px;
+        width: 320px;
+        height: 40px;
+        text: @tr("Atualizando...");
+        font-size: 21px;
+        color: Tema.texto-sec;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        visible: root.carregando;
+    }
+
+    // grade de 3 colunas: 24 + 420*coluna (392 de largura, 28 de vão)
+    Flickable {
+        x: 0px;
+        y: 112px;
+        width: 1280px;
+        height: 608px;
+        content-width: 1280px;
+        content-height: max(608px, ceil(root.apps.length / 3) * 166px - 16px);
+
+        for item[i] in root.apps : CartaoLoja {
+            x: 24px + mod(i, 3) * 420px;
+            y: floor(i / 3) * 166px;
+            app: item;
+            aberto => { root.abrir(i); }
+        }
+    }
+
+    // mensagem centralizada (ex.: loja vazia ou sem rede)
+    Text {
+        x: 32px;
+        y: 152px;
+        width: 1216px;
+        height: 520px;
+        text: root.mensagem;
+        font-size: 34px;
+        color: Tema.texto-sec;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        visible: root.mensagem != "";
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos para os textos dinâmicos (nomes, categorias,
+    // descrições, autores, mensagens e caracteres de ícone dos apps).
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 48px; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 34px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 34px; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 21px; }
+}
+
+// ---------------------------------------------------------------- app da loja
+
+export component TelaAppLoja inherits Rectangle {
+    in property <AppLojaUi> app;
+    in property <bool> ocupado;
+    in property <string> mensagem;
+
+    callback voltar();
+    callback instalar();
+    callback remover();
+    callback abrir-app();
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: root.app.nome;
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    // ícone grande à esquerda
+    Rectangle {
+        x: 80px;
+        y: 160px;
+        width: 200px;
+        height: 200px;
+        border-radius: 100px;
+        background: root.app.cor;
+        clip: true;
+
+        Text {
+            x: 0px;
+            y: 0px;
+            width: 200px;
+            height: 200px;
+            text: root.app.icone;
+            font-size: 110px;
+            color: #ffffffff;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // coluna de informações à direita
+    Text {
+        x: 336px;
+        y: 150px;
+        width: 880px;
+        height: 56px;
+        text: root.app.nome;
+        font-size: 44px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 336px;
+        y: 212px;
+        width: 880px;
+        height: 38px;
+        text: root.app.autor;
+        font-size: 24px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 336px;
+        y: 254px;
+        width: 880px;
+        height: 34px;
+        text: root.app.categoria;
+        font-size: 21px;
+        color: Tema.destaque;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 336px;
+        y: 298px;
+        width: 880px;
+        height: 116px;
+        text: root.app.descricao;
+        font-size: 26px;
+        color: Tema.texto;
+        overflow: elide;
+        wrap: word-wrap;
+    }
+    Text {
+        x: 336px;
+        y: 430px;
+        width: 880px;
+        height: 34px;
+        text: @tr("Requer: {}", root.app.requer);
+        font-size: 24px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+        visible: root.app.requer != "";
+    }
+
+    // botões pílula
+    FilledButton {
+        x: 336px;
+        y: 486px;
+        width: 200px;
+        height: 72px;
+        icon: @image-url("icones/download.svg");
+        text: root.ocupado ? @tr("Instalando...") : @tr("Instalar");
+        enabled: !root.ocupado;
+        visible: !root.app.instalado;
+        clicked => { root.instalar(); }
+    }
+    FilledButton {
+        x: 336px;
+        y: 486px;
+        width: 180px;
+        height: 72px;
+        text: @tr("Abrir");
+        enabled: !root.ocupado;
+        visible: root.app.instalado;
+        clicked => { root.abrir-app(); }
+    }
+    OutlineButton {
+        x: 536px;
+        y: 486px;
+        width: 200px;
+        height: 72px;
+        icon: @image-url("icones/delete.svg");
+        text: @tr("Remover");
+        enabled: !root.ocupado;
+        visible: root.app.instalado;
+        clicked => { root.remover(); }
+    }
+
+    // mensagem de retorno (erros em vermelho)
+    Text {
+        x: 336px;
+        y: 586px;
+        width: 880px;
+        height: 84px;
+        text: root.mensagem;
+        font-size: 26px;
+        color: root.mensagem.starts-with("erro") ? Tema.erro : Tema.texto-sec;
+        wrap: word-wrap;
+        vertical-alignment: center;
+        visible: root.mensagem != "";
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos para os textos dinâmicos do app e da mensagem.
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 110px; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 44px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 34px; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 26px; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 24px; }
+    Text { visible: false; text: "0123456789.,:;!?()[]%@#&+-/_'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç◷★✉♫≋✱⚙"; font-size: 21px; }
+}

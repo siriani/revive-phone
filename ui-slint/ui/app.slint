@@ -5,6 +5,8 @@ export { Tema }
 export { FilaItem, Album } from "musica_ui.slint";
 export { HoraClima, MoedaMini } from "painel_ui.slint";
 export { HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
+export { AppLojaUi } from "loja_ui.slint";
+export { NoMesh, MsgMesh } from "mesh_ui.slint";
 export { AppOrdem } from "inicio_ui.slint";
 
 // ícones do clima por nome (o Rust escolhe o nome; as imagens vêm embutidas)
@@ -26,6 +28,8 @@ import { MenuInner } from "../material/ui/components/menu.slint";
 import { TelaTocandoMat, TelaFila, RailMusica, FilaItem, Album, MusicaInicioMat, MiniPlayer } from "musica_ui.slint";
 import { PainelMat, HoraClima, MoedaMini } from "painel_ui.slint";
 import { TelaClima, TelaCidade, HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
+import { TelaLoja, TelaAppLoja, AppLojaUi } from "loja_ui.slint";
+import { TelaMesh, NoMesh, MsgMesh } from "mesh_ui.slint";
 import { TelaOrganizar, BotaoEditarInicio, AppOrdem } from "inicio_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
@@ -985,7 +989,7 @@ export component AppWindow inherits Window {
     out property <string> caracteres-embutidos:
         "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
         + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●"
-        + "◷≋✱⚙☁✉★⌂☀☠";  // ícones dos apps (vêm do Rust, não estão em literais)
+        + "◷≋✱⚙☁✉★⌂☀☠◉";  // ícones dos apps (vêm do Rust, não estão em literais)
 
     in-out property <string> tela: "inicio";
     in property <[AppInfo]> apps;
@@ -1142,6 +1146,25 @@ export component AppWindow inherits Window {
     callback cl-atualizar();
     callback cid-digitar();
     callback cid-escolher(int);
+    // loja de apps
+    in property <[AppLojaUi]> loja-apps;
+    in property <string> loja-msg;
+    in property <bool> loja-carregando;
+    in property <AppLojaUi> loja-app;
+    in property <bool> loja-ocupado;
+    in property <string> loja-app-msg;
+    callback loja-atualizar();
+    callback loja-abrir(int);
+    callback loja-instalar();
+    callback loja-remover();
+    // Meshtastic
+    in property <string> mesh-estado;
+    in property <[NoMesh]> mesh-nos;
+    in property <[MsgMesh]> mesh-msgs;
+    in property <string> mesh-rascunho;
+    callback mesh-digitar();
+    callback mesh-enviar();
+    callback mesh-configurar();
     // organizar início
     in property <[AppOrdem]> org-apps;
     callback org-alternar(int);
@@ -1212,6 +1235,29 @@ export component AppWindow inherits Window {
             voltar => { root.ir("clima"); }
             digitar => { root.cid-digitar(); }
             escolher(i) => { root.cid-escolher(i); }
+        }
+        if root.tela == "mesh": TelaMesh {
+            width: 1280px; height: 720px; estado: root.mesh-estado; nos: root.mesh-nos;
+            mensagens: root.mesh-msgs; canal: "LongFast"; rascunho: root.mesh-rascunho;
+            voltar => { root.ir("inicio"); }
+            digitar => { root.mesh-digitar(); }
+            enviar => { root.mesh-enviar(); }
+            configurar => { root.mesh-configurar(); }
+        }
+        if root.tela == "loja": TelaLoja {
+            width: 1280px; height: 720px; apps: root.loja-apps; mensagem: root.loja-msg;
+            carregando: root.loja-carregando;
+            voltar => { root.ir("inicio"); }
+            abrir(i) => { root.loja-abrir(i); }
+            atualizar => { root.loja-atualizar(); }
+        }
+        if root.tela == "loja-app": TelaAppLoja {
+            width: 1280px; height: 720px; app: root.loja-app; ocupado: root.loja-ocupado;
+            mensagem: root.loja-app-msg;
+            voltar => { root.ir("loja"); }
+            instalar => { root.loja-instalar(); }
+            remover => { root.loja-remover(); }
+            abrir-app => { root.ir("m:" + root.loja-app.id); }
         }
         if root.tela == "organizar": TelaOrganizar {
             width: 1280px; height: 720px; apps: root.org-apps;

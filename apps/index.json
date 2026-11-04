@@ -1,0 +1,46 @@
+{
+  "versao": 1,
+  "apps": [
+    {
+      "id": "cripto",
+      "nome": "Cripto",
+      "descricao": "Cotações das maiores moedas em reais, direto da API pública da CoinGecko. Não precisa de configuração.",
+      "autor": "Revive",
+      "icone": "★",
+      "cor": "#7a4b12",
+      "categoria": "Finanças",
+      "manifesto": "https://raw.githubusercontent.com/siriani/revive-phone/main/ui-slint/apps/cripto.json",
+      "sha256": "8b218fe363bdc1cdb3c6f05a02667a9acda1c828d82cf34f5f43187001a239e0",
+      "requer": []
+    },
+    {
+      "id": "home-assistant",
+      "nome": "Sala",
+      "descricao": "Cartões com os valores de um sensor do Home Assistant (temperatura, unidade e última mudança).",
+      "autor": "Revive",
+      "icone": "⌂",
+      "cor": "#1d4e6b",
+      "categoria": "Casa",
+      "manifesto": "https://raw.githubusercontent.com/siriani/revive-phone/main/ui-slint/apps/home-assistant.json",
+      "sha256": "c09757f61645182a858e40884b8ad624f599b090f0de4d93674fa34aa1dd4785",
+      "requer": [
+        "config: URL do servidor Home Assistant",
+        "config: token de longa duração do Home Assistant"
+      ]
+    },
+    {
+      "id": "uptime-kuma",
+      "nome": "Serviços",
+      "descricao": "Lista os monitores de uma página de status pública do Uptime Kuma, com nome e tipo de cada um.",
+      "autor": "Revive",
+      "icone": "✱",
+      "cor": "#2e5e3e",
+      "categoria": "Serviços",
+      "manifesto": "https://raw.githubusercontent.com/siriani/revive-phone/main/ui-slint/apps/uptime-kuma.json",
+      "sha256": "1042589b0aeb08bcdd52f30feabed0da634b1afeb532b3b5a8e1c7e893cc7589",
+      "requer": [
+        "config: URL da página de status do Uptime Kuma"
+      ]
+    }
+  ]
+}
