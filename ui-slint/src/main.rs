@@ -5,6 +5,7 @@
 //! pelo evdev. Os serviços (revive-bt, revive-mpv) continuam como antes.
 
 mod app;
+mod brilho;
 mod clima;
 mod cripto;
 mod dados;
@@ -119,6 +120,7 @@ fn main() {
     if let Err(e) = slint::select_bundled_translation(&i18n::idioma()) {
         eprintln!("idioma {}: {e:?}", i18n::idioma());
     }
+    brilho::restaurar();
     app::ligar(&ui);
     ui.show().unwrap();
 

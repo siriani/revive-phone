@@ -553,3 +553,141 @@ msgstr ""
 
 msgid "✉ {}: {}"
 msgstr ""
+
+msgid "Instalado"
+msgstr ""
+
+msgid "Loja de apps"
+msgstr ""
+
+msgid "Requer: {}"
+msgstr ""
+
+msgid "Instalando..."
+msgstr ""
+
+msgid "Instalar"
+msgstr ""
+
+msgid "Abrir"
+msgstr ""
+
+msgid "Remover"
+msgstr ""
+
+msgid "Meshtastic"
+msgstr ""
+
+msgid "Nós"
+msgstr ""
+
+msgid "Toque para escrever"
+msgstr ""
+
+msgid "Nenhum nó ou mensagem ainda"
+msgstr ""
+
+msgid "Sobre o sistema"
+msgstr ""
+
+msgid "IP do nó Meshtastic (Wi-Fi)"
+msgstr ""
+
+msgid "agora"
+msgstr ""
+
+msgid "há {} min"
+msgstr ""
+
+msgid "há {} h"
+msgstr ""
+
+msgid "há {} d"
+msgstr ""
+
+msgid "Eu"
+msgstr ""
+
+msgid "erro: configure o IP do nó"
+msgstr ""
+
+msgid "Nenhum app no catálogo"
+msgstr ""
+
+msgid "não foi possível baixar o catálogo: {}"
+msgstr ""
+
+msgid "id de app inválido"
+msgstr ""
+
+msgid "o manifesto não confere (esperado {}, obtido {})"
+msgstr ""
+
+msgid "o manifesto não é um JSON válido"
+msgstr ""
+
+msgid "não foi possível criar {}: {}"
+msgstr ""
+
+msgid "não foi possível gravar {}: {}"
+msgstr ""
+
+msgid "o app {} não está instalado"
+msgstr ""
+
+msgid "não foi possível remover {}: {}"
+msgstr ""
+
+msgid "o catálogo não é texto UTF-8"
+msgstr ""
+
+msgid "catálogo inválido"
+msgstr ""
+
+msgid "catálogo sem a lista de apps"
+msgstr ""
+
+msgid "núcleos"
+msgstr ""
+
+msgid "livres"
+msgstr ""
+
+msgid "livre"
+msgstr ""
+
+msgid "máx"
+msgstr ""
+
+msgid "mín"
+msgstr ""
+
+msgid "msm DRM (aceleração do controlador de tela)"
+msgstr ""
+
+msgid "simpledrm (framebuffer do bootloader)"
+msgstr ""
+
+msgid "controlada pelo bootloader"
+msgstr ""
+
+msgid "kgsl (Adreno)"
+msgstr ""
+
+msgid "sem driver (Adreno 305)"
+msgstr ""
+
+msgid "sem placa de som interna"
+msgstr ""
+
+msgid "presente"
+msgstr ""
+
+msgid "status"
+msgstr ""
+
+msgid "online"
+msgstr ""
+
+msgid "capacidade"
+msgstr ""

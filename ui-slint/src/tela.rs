@@ -183,9 +183,11 @@ pub struct Entrada {
     /// eventN já examinados (aceitos ou não): abrir um dispositivo custa dezenas de ms
     vistos: Vec<PathBuf>,
     ultima_busca: Instant,
-    // touch (coordenadas físicas)
-    tx: f32,
-    ty: f32,
+    // touch: posição bruta do aparelho (convertida para a tela no SYN_REPORT)
+    rx: f32,
+    ry: f32,
+    /// o toque atual já tem X/Y válido; sem isso não sai Pressed (evita (0,0))
+    tem_pos: bool,
     encostou: bool,
     soltou: bool,
     // mouse (coordenadas lógicas)
@@ -245,8 +247,9 @@ impl Entrada {
             devs: vec![],
             vistos: vec![],
             ultima_busca: Instant::now() - Duration::from_secs(60),
-            tx: 0.0,
-            ty: 0.0,
+            rx: 0.0,
+            ry: 0.0,
+            tem_pos: false,
             encostou: false,
             soltou: false,
             mx: 640.0,
@@ -296,13 +299,31 @@ impl Entrada {
                 continue;
             };
             let (mut max_x, mut max_y) = (720.0, 1280.0);
+            // se o dedo já está na tela quando o aparelho abre, o kernel não repete o evento:
+            // lê o estado atual (EVIOCGABS/EVIOCGKEY) em vez de esperar um toque novo
+            let mut tocando_agora = None;
             if tipo == Tipo::Touch {
                 if let Ok(st) = dev.get_abs_state() {
                     max_x = st[ABS_MT_POSITION_X as usize].maximum.max(1) as f32;
                     max_y = st[ABS_MT_POSITION_Y as usize].maximum.max(1) as f32;
+                    let id = st[ABS_MT_TRACKING_ID as usize].value;
+                    let btn = dev.get_key_state().map(|k| k.contains(evdev::KeyCode(BTN_TOUCH))).unwrap_or(false);
+                    if id >= 0 || btn {
+                        tocando_agora = Some((st[ABS_MT_POSITION_X as usize].value, st[ABS_MT_POSITION_Y as usize].value));
+                    }
                 }
             }
             eprintln!("entrada: {:?} {} {}", tipo, dev.name().unwrap_or("?"), caminho.display());
+            if tipo == Tipo::Touch {
+                self.zerar_toque();
+                if let Some((x, y)) = tocando_agora {
+                    self.rx = x as f32;
+                    self.ry = y as f32;
+                    self.tem_pos = true;
+                    // o Pressed sai no primeiro quadro seguinte (soltar ou mexer)
+                    self.encostou = true;
+                }
+            }
             self.devs.push(Disp { dev, tipo, caminho, max_x, max_y });
         }
     }
@@ -331,6 +352,9 @@ impl Entrada {
                 eprintln!("entrada: {:?} saiu", tipo);
                 let saiu = self.devs.remove(i);
                 self.vistos.retain(|p| *p != saiu.caminho);
+                if tipo == Tipo::Touch {
+                    self.zerar_toque();
+                }
                 return vec![];
             }
         };
@@ -345,19 +369,44 @@ impl Entrada {
         saida
     }
 
+    /// Toque zerado: o aparelho abriu ou saiu, nada do que veio antes vale.
+    fn zerar_toque(&mut self) {
+        self.encostou = false;
+        self.soltou = false;
+        self.tem_pos = false;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn touch(&mut self, t: u16, c: u16, v: i32, max_x: f32, max_y: f32, tela: &Tela, out: &mut Vec<WindowEvent>) {
         match (t, c) {
-            (EV_ABS, ABS_MT_POSITION_X) => self.tx = v as f32 * tela.pw as f32 / max_x,
-            (EV_ABS, ABS_MT_POSITION_Y) => self.ty = v as f32 * tela.ph as f32 / max_y,
+            // coordenadas brutas; a conversão para a tela é feita no SYN_REPORT
+            (EV_ABS, ABS_MT_POSITION_X) => {
+                self.rx = v as f32;
+                self.tem_pos = true;
+            }
+            (EV_ABS, ABS_MT_POSITION_Y) => {
+                self.ry = v as f32;
+                self.tem_pos = true;
+            }
             (EV_ABS, ABS_MT_TRACKING_ID) if v >= 0 => self.encostou = true,
             (EV_ABS, ABS_MT_TRACKING_ID) => self.soltou = true,
             (EV_KEY, BTN_TOUCH) if v == 1 => self.encostou = true,
             (EV_KEY, BTN_TOUCH) => self.soltou = true,
             (EV_SYN, SYN_REPORT) => {
-                let (x, y) = tela.para_logico(self.tx, self.ty);
+                if !self.tem_pos {
+                    // sem posição conhecida ainda: espera o próximo quadro com X/Y.
+                    // Se o toque já soltou sem nunca ter posição, descarta tudo.
+                    if self.soltou {
+                        self.soltou = false;
+                        self.encostou = false;
+                    }
+                    return;
+                }
+                let (px, py) = (self.rx * tela.pw as f32 / max_x, self.ry * tela.ph as f32 / max_y);
+                let (x, y) = tela.para_logico(px, py);
                 let position = LogicalPosition::new(x, y);
                 self.mouse_usado = false;
+                // o Moved sempre vem antes do Pressed: o Slint escolhe o alvo pela última posição
                 out.push(WindowEvent::PointerMoved { position });
                 if self.encostou {
                     self.encostou = false;
@@ -367,6 +416,8 @@ impl Entrada {
                 }
                 if self.soltou {
                     self.soltou = false;
+                    // o próximo toque só tem posição depois de um novo X/Y
+                    self.tem_pos = false;
                     out.push(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
                     out.push(WindowEvent::PointerExited);
                 }

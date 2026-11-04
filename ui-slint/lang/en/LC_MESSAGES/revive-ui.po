@@ -562,3 +562,141 @@ msgstr "▶ Play all"
 
 msgid "✉ {}: {}"
 msgstr "✉ {}: {}"
+
+msgid "Instalado"
+msgstr "Installed"
+
+msgid "Loja de apps"
+msgstr "App store"
+
+msgid "Requer: {}"
+msgstr "Requires: {}"
+
+msgid "Instalando..."
+msgstr "Installing..."
+
+msgid "Instalar"
+msgstr "Install"
+
+msgid "Abrir"
+msgstr "Open"
+
+msgid "Remover"
+msgstr "Remove"
+
+msgid "Meshtastic"
+msgstr "Meshtastic"
+
+msgid "Nós"
+msgstr "Nodes"
+
+msgid "Toque para escrever"
+msgstr "Tap to write"
+
+msgid "Nenhum nó ou mensagem ainda"
+msgstr "No nodes or messages yet"
+
+msgid "Sobre o sistema"
+msgstr "About the system"
+
+msgid "IP do nó Meshtastic (Wi-Fi)"
+msgstr "Meshtastic node IP (Wi-Fi)"
+
+msgid "agora"
+msgstr "now"
+
+msgid "há {} min"
+msgstr "{} min ago"
+
+msgid "há {} h"
+msgstr "{} h ago"
+
+msgid "há {} d"
+msgstr "{} d ago"
+
+msgid "Eu"
+msgstr "Me"
+
+msgid "erro: configure o IP do nó"
+msgstr "error: configure the node IP"
+
+msgid "Nenhum app no catálogo"
+msgstr "No apps in the catalog"
+
+msgid "não foi possível baixar o catálogo: {}"
+msgstr "could not download the catalog: {}"
+
+msgid "id de app inválido"
+msgstr "invalid app id"
+
+msgid "o manifesto não confere (esperado {}, obtido {})"
+msgstr "manifest mismatch (expected {}, got {})"
+
+msgid "o manifesto não é um JSON válido"
+msgstr "the manifest is not valid JSON"
+
+msgid "não foi possível criar {}: {}"
+msgstr "could not create {}: {}"
+
+msgid "não foi possível gravar {}: {}"
+msgstr "could not write {}: {}"
+
+msgid "o app {} não está instalado"
+msgstr "app {} is not installed"
+
+msgid "não foi possível remover {}: {}"
+msgstr "could not remove {}: {}"
+
+msgid "o catálogo não é texto UTF-8"
+msgstr "the catalog is not UTF-8 text"
+
+msgid "catálogo inválido"
+msgstr "invalid catalog"
+
+msgid "catálogo sem a lista de apps"
+msgstr "catalog without the app list"
+
+msgid "núcleos"
+msgstr "cores"
+
+msgid "livres"
+msgstr "free"
+
+msgid "livre"
+msgstr "free"
+
+msgid "máx"
+msgstr "max"
+
+msgid "mín"
+msgstr "min"
+
+msgid "msm DRM (aceleração do controlador de tela)"
+msgstr "msm DRM (display controller acceleration)"
+
+msgid "simpledrm (framebuffer do bootloader)"
+msgstr "simpledrm (bootloader framebuffer)"
+
+msgid "controlada pelo bootloader"
+msgstr "controlled by the bootloader"
+
+msgid "kgsl (Adreno)"
+msgstr "kgsl (Adreno)"
+
+msgid "sem driver (Adreno 305)"
+msgstr "no driver (Adreno 305)"
+
+msgid "sem placa de som interna"
+msgstr "no internal sound card"
+
+msgid "presente"
+msgstr "present"
+
+msgid "status"
+msgstr "status"
+
+msgid "online"
+msgstr "online"
+
+msgid "capacidade"
+msgstr "capacity"

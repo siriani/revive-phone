@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
-use crate::{clima, i18n, inicio, loja, mesh, sistema};
+use crate::{brilho, clima, i18n, inicio, loja, mesh, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
@@ -1822,6 +1822,9 @@ pub fn ligar(ui: &AppWindow) {
     let escuro = partes.next() != Some("claro");
     ui.global::<Tema>().set_paleta(partes.next().and_then(|p| p.parse().ok()).unwrap_or(0));
     aplicar_tema(ui, escuro);
+    ui.set_brilho_disponivel(brilho::disponivel());
+    ui.set_brilho(brilho::ler());
+    ui.on_brilho_mudar(|v| brilho::definir(v));
     ui.set_musica_configurada(api().configurado());
     let todos = todos_apps();
     let ids: Vec<String> = todos.iter().map(|a| a.id.to_string()).collect();
