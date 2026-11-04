@@ -10,6 +10,7 @@ use md5::{Digest, Md5};
 use serde_json::{json, Value};
 
 use crate::dados::{mpv, mpv_prop};
+use crate::i18n;
 
 const CONF: &str = "/etc/revive/navidrome.conf";
 const FILA: &str = "/run/revive-queue.json";
@@ -118,7 +119,7 @@ impl Subsonic {
                 }
             }
         }
-        Err("Navidrome fora do ar".into())
+        Err(i18n::t("Navidrome fora do ar"))
     }
 
     pub fn url(&self, metodo: &str, params: &[(&str, &str)]) -> Result<String, String> {
@@ -139,7 +140,12 @@ impl Subsonic {
             });
             match r {
                 Ok(v) if v["subsonic-response"]["status"] == "ok" => return Ok(v["subsonic-response"].clone()),
-                Ok(v) => return Err(v["subsonic-response"]["error"]["message"].as_str().unwrap_or("erro").into()),
+                Ok(v) => {
+                    return Err(v["subsonic-response"]["error"]["message"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| i18n::t("erro")))
+                }
                 Err(e) if tentativa == 0 => {
                     eprintln!("musica: {metodo}: {e}; trocando de servidor");
                     *self.base.lock().unwrap() = None; // mudou de rede
@@ -147,7 +153,7 @@ impl Subsonic {
                 Err(e) => return Err(e),
             }
         }
-        Err("sem resposta".into())
+        Err(i18n::t("sem resposta"))
     }
 
     fn lista(v: &Value) -> Vec<Value> {

@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
-use crate::{clima, inicio, sistema};
+use crate::{clima, i18n, inicio, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
@@ -194,7 +194,7 @@ where
             let atual = std::mem::take(&mut e.lista);
             e.pilha.push(atual);
         }
-        e.lista = Lista { titulo: titulo.into(), vazio: "carregando...".into(), ..Default::default() };
+        e.lista = Lista { titulo: titulo.into(), vazio: i18n::t("carregando..."), ..Default::default() };
         e.geracao += 1;
         e.geracao
     });
@@ -210,10 +210,10 @@ where
                 }
                 match r {
                     Ok(itens) => {
-                        e.lista.vazio = "nada aqui".into();
+                        e.lista.vazio = i18n::t("nada aqui");
                         e.lista.itens = itens;
                     }
-                    Err(erro) => e.lista.vazio = format!("não carregou: {}", curto(&erro, 40)),
+                    Err(erro) => e.lista.vazio = i18n::tf("não carregou: {}", &[&curto(&erro, 40)]),
                 }
                 true
             });
@@ -227,8 +227,8 @@ where
 fn itens_faixas(faixas: Vec<Value>, com_album: bool) -> Vec<ItemDados> {
     let f = Arc::new(faixas);
     let mut v = vec![
-        ItemDados { titulo: "▶ Tocar tudo".into(), sub: String::new(), verde: true, acao: Acao::Tocar(f.clone(), 0) },
-        ItemDados { titulo: "Aleatório".into(), sub: String::new(), verde: false, acao: Acao::Aleatorio(f.clone()) },
+        ItemDados { titulo: i18n::t("▶ Tocar tudo"), sub: String::new(), verde: true, acao: Acao::Tocar(f.clone(), 0) },
+        ItemDados { titulo: i18n::t("Aleatório"), sub: String::new(), verde: false, acao: Acao::Aleatorio(f.clone()) },
     ];
     for (i, x) in f.iter().enumerate() {
         let titulo = x["title"].as_str().unwrap_or("?");
@@ -263,7 +263,7 @@ fn itens_artistas(artistas: Vec<Value>) -> Vec<ItemDados> {
         .into_iter()
         .map(|a| ItemDados {
             titulo: a["name"].as_str().unwrap_or("?").into(),
-            sub: format!("{} álbuns", a["albumCount"].as_i64().unwrap_or(0)),
+            sub: i18n::tf("{} álbuns", &[&a["albumCount"].as_i64().unwrap_or(0).to_string()]),
             verde: false,
             acao: Acao::Artista(a),
         })
@@ -272,14 +272,14 @@ fn itens_artistas(artistas: Vec<Value>) -> Vec<ItemDados> {
 
 fn tocar(ui: &AppWindow, faixas: Vec<Value>, inicio: usize) {
     ui.set_tela(ss("tocando"));
-    ui.set_aviso(ss("abrindo..."));
+    ui.set_aviso(ss(i18n::t("abrindo...")));
     let fraca = ui.as_weak();
     std::thread::spawn(move || {
         let r = api().tocar(&faixas, inicio);
         let _ = fraca.upgrade_in_event_loop(move |ui| {
             ui.set_aviso(ss(match r {
                 Ok(()) => String::new(),
-                Err(e) => format!("não tocou: {}", curto(&e, 40)),
+                Err(e) => i18n::tf("não tocou: {}", &[&curto(&e, 40)]),
             }))
         });
     });
@@ -295,7 +295,7 @@ fn executar(ui: &AppWindow, acao: Acao) {
         }
         Acao::Album(a) => {
             let id = a["id"].as_str().unwrap_or("").to_string();
-            abrir_lista(ui, a["name"].as_str().unwrap_or("Álbum"), move |s| Ok(itens_faixas(s.album(&id)?, false)));
+            abrir_lista(ui, a["name"].as_str().unwrap_or(&i18n::t("Álbum")), move |s| Ok(itens_faixas(s.album(&id)?, false)));
         }
         Acao::Artista(a) => {
             let id = a["id"].as_str().unwrap_or("").to_string();
@@ -331,7 +331,7 @@ fn artistas_letra(ui: &AppWindow, letra: String) {
         e.origem = "letras".into();
     });
     let cache = EST.with_borrow(|e| e.artistas.clone());
-    abrir_lista(ui, &format!("Artistas · {letra}"), move |s| {
+    abrir_lista(ui, &i18n::tf("Artistas · {}", &[&letra]), move |s| {
         let todos = match cache {
             Some(a) => a,
             None => s.artistas()?,
@@ -380,7 +380,8 @@ fn teclas(shift: bool, sym: bool, confirmar: &str) -> Vec<Tecla> {
     };
     v.push(especial(if sym { "abc" } else { "⇧" }, 10.0, 170.0, 44.0, tecla_cor));
     v.push(especial(if sym { "ABC" } else { "?123" }, 180.0, 340.0, 26.0, tecla_cor));
-    v.push(especial("espaço", 350.0, 780.0, 26.0, tecla_cor));
+    let espaco = i18n::t("espaço");
+    v.push(especial(&espaco, 350.0, 780.0, 26.0, tecla_cor));
     v.push(especial("⌫", 790.0, 950.0, 44.0, tecla_cor));
     v.push(especial(confirmar, 960.0, 1270.0, 34.0, Color::from_rgb_u8(40, 110, 70)));
     v
@@ -392,31 +393,34 @@ fn atualizar_teclado(ui: &AppWindow) {
             || matches!(&e.modo, Modo::Campo(c) if c == "senha")
             || matches!(&e.modo, Modo::Tg(c) if c == "senha");
         let confirmar = match &e.modo {
-            Modo::Senha(_) => "Conectar",
-            Modo::Busca => "Buscar",
-            Modo::Campo(_) => "OK",
-            Modo::Tg(_) => "Enviar",
-            Modo::Cidade => "Buscar",
+            Modo::Senha(_) => i18n::t("Conectar"),
+            Modo::Busca => i18n::t("Buscar"),
+            Modo::Campo(_) => i18n::t("OK"),
+            Modo::Tg(_) => i18n::t("Enviar"),
+            Modo::Cidade => i18n::t("Buscar"),
         };
         let mostrado = if senha && e.ocultar { "•".repeat(e.texto.chars().count()) } else { e.texto.clone() };
         let ini = mostrado.chars().count().saturating_sub(30);
         ui.set_teclado_texto(ss(mostrado.chars().skip(ini).collect::<String>()));
         ui.set_teclado_vazio(ss(match &e.modo {
-            Modo::Senha(s) => format!("senha de {}", curto(s, 18)),
-            Modo::Busca => "buscar música".into(),
-            Modo::Cidade => "nome da cidade".into(),
-            Modo::Campo(c) => format!("{c} do Navidrome"),
+            Modo::Senha(s) => i18n::tf("senha de {}", &[&curto(s, 18)]),
+            Modo::Busca => i18n::t("buscar música"),
+            Modo::Cidade => i18n::t("nome da cidade"),
+            Modo::Campo(c) => {
+                let rotulo = i18n::t(c);
+                i18n::tf("{} do Navidrome", &[&rotulo])
+            }
             Modo::Tg(c) => match c.as_str() {
-                "telefone" => "telefone com DDI, ex.: +5511999999999".into(),
-                "codigo" => "código que chegou no Telegram".into(),
-                "senha" => "senha de duas etapas".into(),
-                _ => "mensagem".into(),
+                "telefone" => i18n::t("telefone com DDI, ex.: +5511999999999"),
+                "codigo" => i18n::t("código que chegou no Telegram"),
+                "senha" => i18n::t("senha de duas etapas"),
+                _ => i18n::t("mensagem"),
             },
         }));
         ui.set_teclado_senha(senha);
         ui.set_teclado_ocultar(e.ocultar);
-        ui.set_teclado_confirmar(ss(confirmar));
-        ui.set_teclas(ModelRc::new(VecModel::from(teclas(e.shift, e.sym, confirmar))));
+        ui.set_teclado_confirmar(ss(confirmar.clone()));
+        ui.set_teclas(ModelRc::new(VecModel::from(teclas(e.shift, e.sym, &confirmar))));
     });
 }
 
@@ -458,7 +462,7 @@ fn confirmar(ui: &AppWindow) {
                     tg_cmd(telegram::Cmd::Enviar(v));
                 }
                 passo => {
-                    ui.set_tg_mensagem(ss("aguarde..."));
+                    ui.set_tg_mensagem(ss(i18n::t("aguarde...")));
                     ui.set_tela(ss("tg-login"));
                     tg_cmd(match passo {
                         "telefone" => telegram::Cmd::Telefone(v),
@@ -512,11 +516,16 @@ fn tecla(ui: &AppWindow, t: &str) {
             e.sym = true;
             e.shift = false;
         }),
-        "espaço" => EST.with_borrow_mut(|e| e.texto.push(' ')),
+        s if s == i18n::t("espaço").as_str() => EST.with_borrow_mut(|e| e.texto.push(' ')),
         "⌫" => EST.with_borrow_mut(|e| {
             e.texto.pop();
         }),
-        "Conectar" | "Buscar" | "OK" | "Enviar" => return confirmar(ui),
+        s if [i18n::t("Conectar"), i18n::t("Buscar"), i18n::t("OK"), i18n::t("Enviar")]
+            .iter()
+            .any(|c| c.as_str() == s) =>
+        {
+            return confirmar(ui)
+        }
         letra => EST.with_borrow_mut(|e| {
             e.texto.push_str(letra);
             e.shift = false;
@@ -585,7 +594,7 @@ fn ir(ui: &AppWindow, tela: &str) {
         "wifi" => procurar_redes(ui),
         "bt" => {
             if !dados::bt_cmd("scan") {
-                ui.set_aviso(ss("serviço revive-bt parado"));
+                ui.set_aviso(ss(i18n::t("serviço revive-bt parado")));
             }
         }
         _ => {}
@@ -625,12 +634,12 @@ fn mostrar_fileira(ui: &AppWindow, fila: &str, m: Rc<VecModel<Album>>) {
 fn carregar_musica(ui: &AppWindow) {
     let h = chrono::Local::now().format("%H").to_string().parse::<u32>().unwrap_or(12);
     ui.set_mus_saudacao(ss(match h {
-        5..=11 => "Bom dia",
-        12..=17 => "Boa tarde",
-        _ => "Boa noite",
+        5..=11 => i18n::t("Bom dia"),
+        12..=17 => i18n::t("Boa tarde"),
+        _ => i18n::t("Boa noite"),
     }));
     if !api().configurado() {
-        ui.set_mus_mensagem(ss("Configure o Navidrome em ⚙ Ajustes"));
+        ui.set_mus_mensagem(ss(i18n::t("Configure o Navidrome em ⚙ Ajustes")));
         return;
     }
     ui.set_mus_mensagem(ss(""));
@@ -697,7 +706,12 @@ fn abrir_album_pagina(ui: &AppWindow, album: Value) {
             let n = v.len();
             ui.set_album_faixas(ModelRc::new(VecModel::from(v)));
             let info = ui.get_album_info();
-            ui.set_album_info(ss(if info.is_empty() { format!("{n} faixas") } else { format!("{info} · {n} faixas") }));
+            let n = n.to_string();
+            ui.set_album_info(ss(if info.is_empty() {
+                i18n::tf("{} faixas", &[&n])
+            } else {
+                i18n::tf("{} · {} faixas", &[info.as_str(), &n])
+            }));
             if let Some(b) = buf {
                 ui.set_album_capa(Image::from_rgba8(b));
             }
@@ -747,7 +761,7 @@ thread_local! {
 fn mostrar_direto(ui: &AppWindow, titulo: &str, itens: Vec<ItemDados>) {
     EST.with_borrow_mut(|e| {
         let pagina = if e.lista.titulo == titulo { e.lista.pagina } else { 0 };
-        e.lista = Lista { titulo: titulo.into(), itens, pagina, vazio: "nada aqui".into() };
+        e.lista = Lista { titulo: titulo.into(), itens, pagina, vazio: i18n::t("nada aqui") };
     });
     ui.set_tela(ss("lista"));
     mostrar_lista(ui);
@@ -776,13 +790,16 @@ fn bolha(m: &telegram::Msg) -> Bolha {
 fn tg_mostrar_estado(ui: &AppWindow) {
     let estado = TG_ESTADO.with_borrow(|e| e.clone());
     let (msg, botao) = match estado.as_str() {
-        "" => ("conectando ao Telegram...".to_string(), ""),
-        "sem-conf" => ("Falta /etc/revive/telegram.conf (api_id e api_hash do my.telegram.org).".into(), ""),
-        "telefone" => ("Entre com a sua conta: toque em Digitar e escreva o telefone com DDI.".into(), "Digitar"),
-        "codigo" => ("O Telegram mandou um código para a sua conta. Toque em Digitar.".into(), "Digitar"),
-        "senha" => ("A conta tem verificação em duas etapas. Digite a senha.".into(), "Digitar"),
-        "pronto" => ("carregando conversas...".into(), ""),
-        erro => (erro.to_string(), "Digitar"),
+        "" => (i18n::t("conectando ao Telegram..."), String::new()),
+        "sem-conf" => (i18n::t("Falta /etc/revive/telegram.conf (api_id e api_hash do my.telegram.org)."), String::new()),
+        "telefone" => (
+            i18n::t("Entre com a sua conta: toque em Digitar e escreva o telefone com DDI."),
+            i18n::t("Digitar"),
+        ),
+        "codigo" => (i18n::t("O Telegram mandou um código para a sua conta. Toque em Digitar."), i18n::t("Digitar")),
+        "senha" => (i18n::t("A conta tem verificação em duas etapas. Digite a senha."), i18n::t("Digitar")),
+        "pronto" => (i18n::t("carregando conversas..."), String::new()),
+        erro => (erro.to_string(), i18n::t("Digitar")),
     };
     ui.set_tg_mensagem(ss(msg));
     ui.set_tg_botao(ss(botao));
@@ -801,7 +818,7 @@ fn abrir_telegram(ui: &AppWindow) {
         e.origem = "inicio".into();
     });
     if TG_ESTADO.with_borrow(|e| e == "pronto") {
-        ui.set_tg_mensagem(ss("carregando conversas..."));
+        ui.set_tg_mensagem(ss(i18n::t("carregando conversas...")));
         ui.set_tela(ss("tg-conversas"));
         tg_cmd(telegram::Cmd::Conversas);
     } else {
@@ -854,7 +871,7 @@ fn tg_evento(ui: &AppWindow, ev: telegram::Evento) {
                     }
                 })
                 .collect();
-            ui.set_tg_mensagem(ss("nenhuma conversa"));
+            ui.set_tg_mensagem(ss(i18n::t("nenhuma conversa")));
             ui.set_tg_conversas(ModelRc::new(VecModel::from(modelo)));
             ui.set_tela(ss("tg-conversas"));
         }
@@ -893,7 +910,7 @@ fn tg_evento(ui: &AppWindow, ev: telegram::Evento) {
                     }
                 });
             } else if !m.minha {
-                ui.set_aviso(ss(curto(&format!("✉ {nome}: {}", m.texto.replace('\n', " ")), 60)));
+                ui.set_aviso(ss(curto(&i18n::tf("✉ {}: {}", &[&nome, &m.texto.replace('\n', " ")]), 60)));
             }
         }
     }
@@ -935,10 +952,10 @@ fn editar_campo(ui: &AppWindow, campo: String) {
 fn salvar_conf(ui: &AppWindow) {
     let (url, user, pass) = EST.with_borrow(|e| (e.conf_url.clone(), e.conf_user.clone(), e.conf_pass.clone()));
     if url.is_empty() || user.is_empty() {
-        ui.set_conf_mensagem(ss("preencha a URL e o usuário"));
+        ui.set_conf_mensagem(ss(i18n::t("preencha a URL e o usuário")));
         return;
     }
-    ui.set_conf_mensagem(ss("testando..."));
+    ui.set_conf_mensagem(ss(i18n::t("testando...")));
     let fraca = ui.as_weak();
     std::thread::spawn(move || {
         let novo = Subsonic::com(&url, &user, &pass);
@@ -947,9 +964,9 @@ fn salvar_conf(ui: &AppWindow) {
             Ok(novo) => {
                 trocar_api(novo);
                 ui.set_musica_configurada(true);
-                ui.set_conf_mensagem(ss("conectado e salvo ✓"));
+                ui.set_conf_mensagem(ss(i18n::t("conectado e salvo ✓")));
             }
-            Err(e) => ui.set_conf_mensagem(ss(format!("não conectou: {}", curto(&e, 40)))),
+            Err(e) => ui.set_conf_mensagem(ss(i18n::tf("não conectou: {}", &[&curto(&e, 40)]))),
         });
     });
 }
@@ -969,7 +986,7 @@ fn preco(v: f64, moeda: &str) -> String {
 fn carregar_cripto(ui: &AppWindow) {
     let moeda = cripto::moeda();
     ui.set_cripto_moeda(ss(moeda.clone()));
-    ui.set_cripto_mensagem(ss("carregando..."));
+    ui.set_cripto_mensagem(ss(i18n::t("carregando...")));
     let ja_tem: Vec<String> = ICONES.with_borrow(|i| i.keys().cloned().collect());
     let fraca = ui.as_weak();
     std::thread::spawn(move || {
@@ -1007,15 +1024,15 @@ fn carregar_cripto(ui: &AppWindow) {
             }
             Err(e) => {
                 ui.set_moedas(ModelRc::new(VecModel::from(Vec::<Moeda>::new())));
-                ui.set_cripto_mensagem(ss(format!("não carregou: {}", curto(&e, 40))));
+                ui.set_cripto_mensagem(ss(i18n::tf("não carregou: {}", &[&curto(&e, 40)])));
             }
         });
     });
 }
 
 fn abrir_grafico(ui: &AppWindow, id: String, nome: String) {
-    ui.set_grafico_titulo(ss(format!("{nome} · últimas 24 h")));
-    ui.set_grafico_info(ss("carregando..."));
+    ui.set_grafico_titulo(ss(i18n::tf("{} · últimas 24 h", &[&nome])));
+    ui.set_grafico_info(ss(i18n::t("carregando...")));
     ui.set_velas(ModelRc::new(VecModel::from(Vec::<Vela>::new())));
     ui.set_tela(ss("grafico"));
     let fraca = ui.as_weak();
@@ -1037,18 +1054,17 @@ fn abrir_grafico(ui: &AppWindow, id: String, nome: String) {
                     })
                     .collect();
                 let var = (g.fechamento / g.abertura - 1.0) * 100.0;
-                ui.set_grafico_maximo(ss(format!("máx {}", preco(g.maximo, &moeda))));
-                ui.set_grafico_minimo(ss(format!("mín {}", preco(g.minimo, &moeda))));
+                ui.set_grafico_maximo(ss(i18n::tf("máx {}", &[&preco(g.maximo, &moeda)])));
+                ui.set_grafico_minimo(ss(i18n::tf("mín {}", &[&preco(g.minimo, &moeda)])));
                 let pct = format!("{var:+.2}%").replace('.', ",");
-                ui.set_grafico_info(ss(format!(
-                    "{} → {}  ({pct})",
-                    preco(g.abertura, &moeda),
-                    preco(g.fechamento, &moeda)
+                ui.set_grafico_info(ss(i18n::tf(
+                    "{} → {}  ({})",
+                    &[&preco(g.abertura, &moeda), &preco(g.fechamento, &moeda), &pct],
                 )));
                 ui.set_grafico_subiu(var >= 0.0);
                 ui.set_velas(ModelRc::new(VecModel::from(velas)));
             }
-            Err(e) => ui.set_grafico_info(ss(format!("não carregou: {}", curto(&e, 40)))),
+            Err(e) => ui.set_grafico_info(ss(i18n::tf("não carregou: {}", &[&curto(&e, 40)]))),
         });
     });
 }
@@ -1092,7 +1108,7 @@ fn procurar_redes(ui: &AppWindow) {
 
 fn conectar_wifi(ui: &AppWindow, ssid: String, senha: String) {
     ui.set_tela(ss("inicio"));
-    ui.set_aviso(ss(format!("conectando a {ssid}...")));
+    ui.set_aviso(ss(i18n::tf("conectando a {}...", &[&ssid])));
     let fraca = ui.as_weak();
     std::thread::spawn(move || {
         dados::wifi_conectar(&ssid, &senha);
@@ -1115,13 +1131,13 @@ fn buscar(ui: &AppWindow, texto: String) {
         let (artistas, albuns, faixas) = s.buscar(&texto)?;
         let mut itens: Vec<ItemDados> = itens_artistas(artistas);
         for i in &mut itens {
-            i.sub = "artista".into();
+            i.sub = i18n::t("artista");
         }
         itens.extend(itens_albuns(albuns));
         let f = Arc::new(faixas);
         itens.extend(f.iter().enumerate().map(|(i, x)| ItemDados {
             titulo: x["title"].as_str().unwrap_or("?").into(),
-            sub: format!("{} · música", x["artist"].as_str().unwrap_or("")),
+            sub: i18n::tf("{} · música", &[x["artist"].as_str().unwrap_or("")]),
             verde: false,
             acao: Acao::Tocar(f.clone(), i),
         }));
@@ -1149,21 +1165,21 @@ fn musica_abrir(ui: &AppWindow, chave: &str) {
         }
         "newest" | "frequent" | "random" => {
             let titulo = match chave {
-                "newest" => "Álbuns recentes",
-                "frequent" => "Mais tocados",
-                _ => "Álbuns aleatórios",
+                "newest" => i18n::t("Álbuns recentes"),
+                "frequent" => i18n::t("Mais tocados"),
+                _ => i18n::t("Álbuns aleatórios"),
             };
             let tipo = chave.to_string();
-            abrir_lista(ui, titulo, move |s| Ok(itens_albuns(s.lista_albuns(&tipo)?)));
+            abrir_lista(ui, &titulo, move |s| Ok(itens_albuns(s.lista_albuns(&tipo)?)));
         }
-        "favoritas" => abrir_lista(ui, "Favoritas", |s| Ok(itens_faixas(s.favoritas()?, true))),
-        "aleatorias" => abrir_lista(ui, "Músicas aleatórias", |s| Ok(itens_faixas(s.aleatorias()?, true))),
-        "playlists" => abrir_lista(ui, "Playlists", |s| {
+        "favoritas" => abrir_lista(ui, &i18n::t("Favoritas"), |s| Ok(itens_faixas(s.favoritas()?, true))),
+        "aleatorias" => abrir_lista(ui, &i18n::t("Músicas aleatórias"), |s| Ok(itens_faixas(s.aleatorias()?, true))),
+        "playlists" => abrir_lista(ui, &i18n::t("Playlists"), |s| {
             Ok(s.playlists()?
                 .into_iter()
                 .map(|p| ItemDados {
                     titulo: p["name"].as_str().unwrap_or("?").into(),
-                    sub: format!("{} músicas", p["songCount"].as_i64().unwrap_or(0)),
+                    sub: i18n::tf("{} músicas", &[&p["songCount"].as_i64().unwrap_or(0).to_string()]),
                     verde: false,
                     acao: Acao::Playlist(p),
                 })
@@ -1205,9 +1221,9 @@ fn aplicar_player(ui: &AppWindow, st: Option<musica::Estado>) {
     ui.set_toc_progresso(if st.dur > 0.0 { (st.t / st.dur).clamp(0.0, 1.0) as f32 } else { 0.0 });
     ui.set_toc_tempo(ss(musica::mmss(st.t)));
     ui.set_toc_duracao(ss(musica::mmss(st.dur)));
-    ui.set_toc_posicao(ss(format!("{} de {}", st.pos + 1, st.total)));
+    ui.set_toc_posicao(ss(i18n::tf("{} de {}", &[&(st.pos + 1).to_string(), &st.total.to_string()])));
     ui.set_toc_pausa(st.pausa);
-    ui.set_toc_volume(ss(format!("volume {:.0}%", st.volume)));
+    ui.set_toc_volume(ss(i18n::tf("volume {}%", &[&format!("{:.0}", st.volume)])));
     ui.set_toc_vol((st.volume / 100.0).clamp(0.0, 1.0) as f32);
     ui.set_toc_favorita(st.favorita);
     ui.set_toc_repetir(ss(st.repetir.clone()));
@@ -1271,13 +1287,13 @@ fn aplicar_bt(ui: &AppWindow, st: Value) {
         .map(|a| {
             let b = |k: &str| a[k].as_bool().unwrap_or(false);
             let estado = if b("ocupado") {
-                "aguarde..."
+                i18n::t("aguarde...")
             } else if b("conectado") {
-                "conectado"
+                i18n::t("conectado")
             } else if b("pareado") {
-                "pareado"
+                i18n::t("pareado")
             } else {
-                "toque para parear"
+                i18n::t("toque para parear")
             };
             let tipo = a["tipo"].as_str().unwrap_or("");
             Aparelho {
@@ -1297,14 +1313,14 @@ fn aplicar_bt(ui: &AppWindow, st: Value) {
 fn bt_acao(ui: &AppWindow, acao: &str, mac: &str) {
     let linha = if acao == "cancelar" { "cancelar".to_string() } else { format!("{acao} {mac}") };
     let aviso = match acao {
-        "pair" => "pareando...",
-        "connect" => "conectando...",
-        "disconnect" => "desconectando...",
-        "remove" => "esquecido",
-        "som" => "tocando...",
-        _ => "",
+        "pair" => i18n::t("pareando..."),
+        "connect" => i18n::t("conectando..."),
+        "disconnect" => i18n::t("desconectando..."),
+        "remove" => i18n::t("esquecido"),
+        "som" => i18n::t("tocando..."),
+        _ => String::new(),
     };
-    ui.set_aviso(ss(if dados::bt_cmd(&linha) { aviso } else { "serviço revive-bt parado" }));
+    ui.set_aviso(ss(if dados::bt_cmd(&linha) { aviso } else { i18n::t("serviço revive-bt parado") }));
 }
 
 // ------------------------------------------------------------------- ligação
@@ -1353,7 +1369,7 @@ fn todos_apps() -> Vec<AppInfo> {
             let imagem = icone_app(id);
             AppInfo {
                 id: ss(*id),
-                nome: ss(*nome),
+                nome: ss(i18n::t(*nome)),
                 icone: ss(*icone),
                 cor: Color::from_rgb_u8(*r, *g, *b),
                 tem_imagem: imagem.is_some(),
@@ -1410,7 +1426,7 @@ fn abrir_clima(ui: &AppWindow) {
             ui.set_cl_erro(ss(""));
             ui.set_cl_cidade(ss(p.cidade));
             ui.set_cl_temp(ss(format!("{}°", p.temp)));
-            ui.set_cl_sensacao(ss(format!("Sensação {}°", p.sensacao)));
+            ui.set_cl_sensacao(ss(i18n::tf("Sensação {}°", &[&p.sensacao.to_string()])));
             ui.set_cl_desc(ss(p.descricao));
             ui.set_cl_icone(ss(p.icone));
             ui.set_cl_umidade(ss(format!("{}%", p.umidade)));
@@ -1456,19 +1472,19 @@ fn buscar_cidade(ui: &AppWindow, nome: String) {
     if nome.is_empty() {
         return;
     }
-    ui.set_cid_mensagem(ss("buscando..."));
+    ui.set_cid_mensagem(ss(i18n::t("buscando...")));
     let fraca = ui.as_weak();
     std::thread::spawn(move || {
         let r = clima::buscar_cidade(&nome);
         let _ = fraca.upgrade_in_event_loop(move |ui| match r {
             Ok(l) => {
-                ui.set_cid_mensagem(ss(if l.is_empty() { "nenhuma cidade encontrada" } else { "" }));
+                ui.set_cid_mensagem(ss(if l.is_empty() { i18n::t("nenhuma cidade encontrada") } else { String::new() }));
                 let v: Vec<LugarUi> =
                     l.iter().map(|x| LugarUi { nome: ss(x.nome.clone()), detalhe: ss(x.detalhe.clone()) }).collect();
                 ui.set_cid_resultados(ModelRc::new(VecModel::from(v)));
                 LUGARES.with_borrow_mut(|g| *g = l);
             }
-            Err(e) => ui.set_cid_mensagem(ss(format!("erro: {}", curto(&e, 50)))),
+            Err(e) => ui.set_cid_mensagem(ss(i18n::tf("erro: {}", &[&curto(&e, 50)]))),
         });
     });
 }
@@ -1476,7 +1492,7 @@ fn buscar_cidade(ui: &AppWindow, nome: String) {
 /// Preço curto para o cartão do Painel: "98,4 mil", "3.120", "0,52".
 fn compacto(p: f64) -> String {
     if p >= 10_000.0 {
-        format!("{:.1} mil", p / 1000.0).replace('.', ",")
+        i18n::tf("{} mil", &[&format!("{:.1}", p / 1000.0).replace('.', ",")])
     } else if p >= 100.0 {
         dados::milhar(p)
     } else {
@@ -1597,7 +1613,7 @@ pub fn ligar(ui: &AppWindow) {
         if let Some(l) = LUGARES.with_borrow(|g| g.get(i.max(0) as usize).cloned()) {
             match clima::salvar_local(&l) {
                 Ok(()) => abrir_clima(&ui),
-                Err(e) => ui.set_cid_mensagem(ss(format!("não consegui salvar: {}", curto(&e, 40)))),
+                Err(e) => ui.set_cid_mensagem(ss(i18n::tf("não consegui salvar: {}", &[&curto(&e, 40)]))),
             }
         }
     });
@@ -1651,6 +1667,16 @@ pub fn ligar(ui: &AppWindow) {
         }
     });
     let f = ui.as_weak();
+    const IDIOMAS: [&str; 3] = ["pt", "en", "es"];
+    ui.set_idioma_atual(IDIOMAS.iter().position(|l| *l == i18n::idioma()).unwrap_or(0) as i32);
+    ui.on_ajustes_idioma(|i| {
+        let l = IDIOMAS.get(i.max(0) as usize).copied().unwrap_or("pt");
+        if l != i18n::idioma() {
+            i18n::definir(l);
+            // os textos montados no Rust (apps, listas, avisos) são refeitos do zero
+            crate::doom::reiniciar();
+        }
+    });
     ui.on_ajustes_paleta(move |i| {
         if let Some(ui) = f.upgrade() {
             ui.global::<Tema>().set_paleta(i);
@@ -1721,12 +1747,18 @@ pub fn ligar(ui: &AppWindow) {
                         ui.set_btc_brl(ss(format!("R$ {}", dados::milhar(b.brl))));
                         ui.set_btc_usd(ss(format!("US$ {}", dados::milhar(b.usd))));
                         if let Some(v) = b.variacao {
-                            ui.set_btc_variacao(ss(format!("{v:+.2}% em 24 h").replace('.', ",")));
+                            ui.set_btc_variacao(ss(i18n::tf(
+                                "{}% em 24 h",
+                                &[&format!("{v:+.2}").replace('.', ",")],
+                            )));
                             ui.set_btc_subiu(v >= 0.0);
                         }
-                        ui.set_btc_info(ss(format!("atualizado às {}", chrono::Local::now().format("%H:%M"))));
+                        ui.set_btc_info(ss(i18n::tf(
+                            "atualizado às {}",
+                            &[&chrono::Local::now().format("%H:%M").to_string()],
+                        )));
                     }
-                    Err(e) => ui.set_btc_info(ss(format!("erro: {}", curto(&e, 40)))),
+                    Err(e) => ui.set_btc_info(ss(i18n::tf("erro: {}", &[&curto(&e, 40)]))),
                 });
             });
         }
@@ -1874,7 +1906,7 @@ pub fn ligar(ui: &AppWindow) {
             let _ = fraca.upgrade_in_event_loop(move |ui| {
                 let ok = w.estado == "COMPLETED";
                 ui.set_wifi_ok(ok);
-                ui.set_wifi_ssid(ss(if w.ssid.is_empty() { "desconectado".into() } else { w.ssid.clone() }));
+                ui.set_wifi_ssid(ss(if w.ssid.is_empty() { i18n::t("desconectado") } else { w.ssid.clone() }));
                 ui.set_wifi_ip(ss(if w.ip.is_empty() { w.estado.to_lowercase() } else { w.ip.clone() }));
                 aplicar_bt(&ui, bt);
                 aplicar_player(&ui, player);

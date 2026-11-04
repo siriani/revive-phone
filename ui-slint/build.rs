@@ -12,6 +12,7 @@ const FORA: &[&str] = &[
 ];
 
 fn main() {
+    println!("cargo:rerun-if-changed=lang");
     // tamanhos de texto da biblioteca Material (escalada 1,5x): chegam aos componentes por
     // variável, então o compilador não os vê; sem isto a fonte não seria pré-renderizada neles
     // (set_var é unsafe na edição 2024; o build script é de uma thread só)
@@ -21,6 +22,11 @@ fn main() {
         "ui/app.slint",
         slint_build::CompilerConfiguration::new()
             .with_style("fluent".into())
+            // traduções (gettext .po em lang/<idioma>/LC_MESSAGES/revive-ui.po) embutidas no binário;
+            // o idioma é escolhido em tempo de execução com slint::select_bundled_translation
+            // sem contexto por componente: o mesmo catálogo serve às telas e ao Rust (src/i18n.rs)
+            .with_default_translation_context(slint_build::DefaultTranslationContext::None)
+            .with_bundled_translations(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lang"))
             // fontes pré-renderizadas no binário: nada de rasterizar texto no celular
             .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer)
             // biblioteca oficial Material 3 do Slint (MIT), copiada da v1.18.1:

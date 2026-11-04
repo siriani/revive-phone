@@ -1,0 +1,491 @@
+# Revive UI — textos do Rust para tradução.
+# Gerado a partir das chamadas a i18n::t / i18n::tf.
+msgid ""
+msgstr ""
+"Project-Id-Version: revive-ui\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-03 00:00+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: src/cripto.rs
+msgid "a CoinGecko pediu uma pausa; tente em 1 minuto"
+msgstr ""
+
+#: src/app.rs
+msgid "A conta tem verificação em duas etapas. Digite a senha."
+msgstr ""
+
+#: src/app.rs
+msgid "abrindo..."
+msgstr ""
+
+#: src/clima.rs
+msgid "Agora"
+msgstr ""
+
+#: src/app.rs
+msgid "aguarde..."
+msgstr ""
+
+#: src/app.rs
+msgid "Ajustes"
+msgstr ""
+
+#: src/app.rs
+msgid "Aleatório"
+msgstr ""
+
+#: src/clima.rs
+msgid "Amanhã"
+msgstr ""
+
+#: src/app.rs
+msgid "artista"
+msgstr ""
+
+#: src/app.rs
+msgid "Artistas · {}"
+msgstr ""
+
+#: src/app.rs
+msgid "atualizado às {}"
+msgstr ""
+
+#: src/app.rs
+msgid "Bluetooth"
+msgstr ""
+
+#: src/app.rs
+msgid "Boa noite"
+msgstr ""
+
+#: src/app.rs
+msgid "Boa tarde"
+msgstr ""
+
+#: src/app.rs
+msgid "Bom dia"
+msgstr ""
+
+#: src/app.rs
+msgid "buscando..."
+msgstr ""
+
+#: src/app.rs
+msgid "Buscar"
+msgstr ""
+
+#: src/app.rs
+msgid "buscar música"
+msgstr ""
+
+#: src/app.rs
+msgid "carregando conversas..."
+msgstr ""
+
+#: src/app.rs
+msgid "carregando..."
+msgstr ""
+
+#: src/clima.rs
+msgid "Chuva"
+msgstr ""
+
+#: src/app.rs
+msgid "Clima"
+msgstr ""
+
+#: src/app.rs
+msgid "conectado"
+msgstr ""
+
+#: src/app.rs
+msgid "conectado e salvo ✓"
+msgstr ""
+
+#: src/app.rs
+msgid "conectando a {}..."
+msgstr ""
+
+#: src/app.rs
+msgid "conectando ao Telegram..."
+msgstr ""
+
+#: src/app.rs
+msgid "conectando..."
+msgstr ""
+
+#: src/app.rs
+msgid "Conectar"
+msgstr ""
+
+#: src/clima.rs
+msgid "configure /etc/revive/painel.conf (lat, lon, cidade)"
+msgstr ""
+
+#: src/app.rs
+msgid "Configure o Navidrome em ⚙ Ajustes"
+msgstr ""
+
+#: src/app.rs
+msgid "Cripto"
+msgstr ""
+
+#: src/clima.rs
+msgid "Céu limpo"
+msgstr ""
+
+#: src/app.rs
+msgid "código que chegou no Telegram"
+msgstr ""
+
+#: src/app.rs
+msgid "desconectado"
+msgstr ""
+
+#: src/app.rs
+msgid "desconectando..."
+msgstr ""
+
+#: src/app.rs
+msgid "Digitar"
+msgstr ""
+
+#: src/clima.rs
+msgid "Dom"
+msgstr ""
+
+#: src/app.rs
+msgid "DOOM II"
+msgstr ""
+
+#: src/app.rs
+msgid "Entre com a sua conta: toque em Digitar e escreva o telefone com DDI."
+msgstr ""
+
+#: src/app.rs
+msgid "Enviar"
+msgstr ""
+
+#: src/musica.rs
+msgid "erro"
+msgstr ""
+
+#: src/app.rs
+msgid "erro: {}"
+msgstr ""
+
+#: src/app.rs
+msgid "espaço"
+msgstr ""
+
+#: src/app.rs
+msgid "esquecido"
+msgstr ""
+
+#: src/app.rs
+msgid "Falta /etc/revive/telegram.conf (api_id e api_hash do my.telegram.org)."
+msgstr ""
+
+#: src/app.rs
+msgid "Favoritas"
+msgstr ""
+
+#: src/clima.rs
+msgid "Garoa"
+msgstr ""
+
+#: src/clima.rs
+msgid "Hoje"
+msgstr ""
+
+#: src/app.rs
+msgid "Mais tocados"
+msgstr ""
+
+#: src/app.rs
+msgid "mensagem"
+msgstr ""
+
+#: src/app.rs
+msgid "máx {}"
+msgstr ""
+
+#: src/app.rs
+msgid "mín {}"
+msgstr ""
+
+#: src/app.rs
+msgid "Música"
+msgstr ""
+
+#: src/app.rs
+msgid "Músicas aleatórias"
+msgstr ""
+
+#: src/app.rs
+msgid "nada aqui"
+msgstr ""
+
+#: src/musica.rs
+msgid "Navidrome fora do ar"
+msgstr ""
+
+#: src/clima.rs
+msgid "Neblina"
+msgstr ""
+
+#: src/app.rs
+msgid "nenhuma cidade encontrada"
+msgstr ""
+
+#: src/app.rs
+msgid "nenhuma conversa"
+msgstr ""
+
+#: src/clima.rs
+msgid "Neve"
+msgstr ""
+
+#: src/app.rs
+msgid "nome da cidade"
+msgstr ""
+
+#: src/clima.rs
+msgid "Nublado"
+msgstr ""
+
+#: src/app.rs
+msgid "não carregou: {}"
+msgstr ""
+
+#: src/app.rs
+msgid "não conectou: {}"
+msgstr ""
+
+#: src/app.rs
+msgid "não consegui salvar: {}"
+msgstr ""
+
+#: src/app.rs
+msgid "não tocou: {}"
+msgstr ""
+
+#: src/app.rs
+msgid "O Telegram mandou um código para a sua conta. Toque em Digitar."
+msgstr ""
+
+#: src/app.rs
+msgid "OK"
+msgstr ""
+
+#: src/app.rs
+msgid "Painel"
+msgstr ""
+
+#: src/clima.rs
+msgid "Pancadas de chuva"
+msgstr ""
+
+#: src/clima.rs
+msgid "Parcialmente nublado"
+msgstr ""
+
+#: src/app.rs
+msgid "pareado"
+msgstr ""
+
+#: src/app.rs
+msgid "pareando..."
+msgstr ""
+
+#: src/app.rs
+msgid "Playlists"
+msgstr ""
+
+#: src/clima.rs
+msgid "Poucas nuvens"
+msgstr ""
+
+#: src/app.rs
+msgid "preencha a URL e o usuário"
+msgstr ""
+
+#: src/clima.rs
+msgid "Qua"
+msgstr ""
+
+#: src/clima.rs
+msgid "Qui"
+msgstr ""
+
+#: src/clima.rs src/cripto.rs
+msgid "resposta inesperada"
+msgstr ""
+
+#: src/clima.rs
+msgid "Seg"
+msgstr ""
+
+#: src/cripto.rs
+msgid "sem dados"
+msgstr ""
+
+#: src/dados.rs
+msgid "sem preço"
+msgstr ""
+
+#: src/musica.rs
+msgid "sem resposta"
+msgstr ""
+
+#: src/cripto.rs
+msgid "sem velas"
+msgstr ""
+
+#: src/app.rs
+msgid "senha"
+msgstr ""
+
+#: src/app.rs
+msgid "senha de duas etapas"
+msgstr ""
+
+#: src/app.rs
+msgid "senha de {}"
+msgstr ""
+
+#: src/app.rs
+msgid "Sensação {}°"
+msgstr ""
+
+#: src/app.rs
+msgid "serviço revive-bt parado"
+msgstr ""
+
+#: src/clima.rs
+msgid "Sex"
+msgstr ""
+
+#: src/clima.rs
+msgid "Sáb"
+msgstr ""
+
+#: src/app.rs
+msgid "telefone com DDI, ex.: +5511999999999"
+msgstr ""
+
+#: src/app.rs
+msgid "Telegram"
+msgstr ""
+
+#: src/clima.rs
+msgid "Ter"
+msgstr ""
+
+#: src/app.rs
+msgid "testando..."
+msgstr ""
+
+#: src/app.rs
+msgid "tocando..."
+msgstr ""
+
+#: src/app.rs
+msgid "toque para parear"
+msgstr ""
+
+#: src/clima.rs
+msgid "Trovoadas"
+msgstr ""
+
+#: src/app.rs
+msgid "url"
+msgstr ""
+
+#: src/app.rs
+msgid "usuário"
+msgstr ""
+
+#: src/app.rs
+msgid "volume {}%"
+msgstr ""
+
+#: src/app.rs
+msgid "Wi-Fi"
+msgstr ""
+
+#: src/app.rs
+msgid "{} de {}"
+msgstr ""
+
+#: src/app.rs
+msgid "{} do Navidrome"
+msgstr ""
+
+#: src/app.rs
+msgid "{} faixas"
+msgstr ""
+
+#: src/app.rs
+msgid "{} mil"
+msgstr ""
+
+#: src/app.rs
+msgid "{} músicas"
+msgstr ""
+
+#: src/app.rs
+msgid "{} · música"
+msgstr ""
+
+#: src/app.rs
+msgid "{} · {} faixas"
+msgstr ""
+
+#: src/app.rs
+msgid "{} · últimas 24 h"
+msgstr ""
+
+#: src/app.rs
+msgid "{} álbuns"
+msgstr ""
+
+#: src/app.rs
+msgid "{} → {}  ({})"
+msgstr ""
+
+#: src/app.rs
+msgid "{}% em 24 h"
+msgstr ""
+
+#: src/app.rs
+msgid "Álbum"
+msgstr ""
+
+#: src/app.rs
+msgid "Álbuns aleatórios"
+msgstr ""
+
+#: src/app.rs
+msgid "Álbuns recentes"
+msgstr ""
+
+#: src/clima.rs
+msgid "—"
+msgstr ""
+
+#: src/app.rs
+msgid "▶ Tocar tudo"
+msgstr ""
+
+#: src/app.rs
+msgid "✉ {}: {}"
+msgstr ""

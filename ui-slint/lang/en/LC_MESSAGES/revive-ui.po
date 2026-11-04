@@ -1,0 +1,564 @@
+# Revive UI — traduções para inglês.
+msgid ""
+msgstr ""
+"Project-Id-Version: revive-ui\n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: 2026-11-03 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Umidade"
+msgstr "Humidity"
+
+msgid "Vento"
+msgstr "Wind"
+
+msgid "Chuva"
+msgstr "Rain"
+
+msgid "UV"
+msgstr "UV"
+
+msgid "Nascer"
+msgstr "Sunrise"
+
+msgid "Pôr do sol"
+msgstr "Sunset"
+
+msgid "Próximas 24 horas"
+msgstr "Next 24 hours"
+
+msgid "Próximos 7 dias"
+msgstr "Next 7 days"
+
+msgid "Escolher cidade"
+msgstr "Choose city"
+
+msgid "Atualizando..."
+msgstr "Updating..."
+
+msgid "Toque para digitar o nome da cidade"
+msgstr "Tap to type the city name"
+
+msgid "Nada tocando · toque para abrir a Música"
+msgstr "Nothing playing · tap to open Music"
+
+msgid "Cripto"
+msgstr "Crypto"
+
+msgid "{n} mensagem não lida"
+msgid_plural "{n} mensagens não lidas"
+msgstr[0] "{n} unread message"
+msgstr[1] "{n} unread messages"
+
+msgid "Organizar início"
+msgstr "Organize Home"
+
+msgid "Toque no olho para mostrar ou ocultar; use as setas para mudar a ordem."
+msgstr "Tap the eye to show or hide; use the arrows to change the order."
+
+msgid "Tocando agora"
+msgstr "Now playing"
+
+msgid "Fila"
+msgstr "Queue"
+
+msgid "Fila vazia"
+msgstr "Queue empty"
+
+msgid "Início"
+msgstr "Home"
+
+msgid "Buscar"
+msgstr "Search"
+
+msgid "Artistas"
+msgstr "Artists"
+
+msgid "Playlists"
+msgstr "Playlists"
+
+msgid "Favoritas"
+msgstr "Favorites"
+
+msgid "Ajustes"
+msgstr "Settings"
+
+msgid "Olá"
+msgstr "Hello"
+
+msgid "Aleatórias"
+msgstr "Shuffle"
+
+msgid "Acesso rápido"
+msgstr "Quick access"
+
+msgid "Mais tocados"
+msgstr "Most played"
+
+msgid "Adicionados recentemente"
+msgstr "Recently added"
+
+msgid "Descubra"
+msgstr "Discover"
+
+msgid "Configurar"
+msgstr "Set up"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Atualizar preço"
+msgstr "Refresh price"
+
+msgid "◀ Início"
+msgstr "◀ Home"
+
+msgid "Wi-Fi: {}"
+msgstr "Wi-Fi: {}"
+
+msgid "Wi-Fi desconectado"
+msgstr "Wi-Fi disconnected"
+
+msgid "Redes Wi-Fi"
+msgstr "Wi-Fi networks"
+
+msgid "procurando..."
+msgstr "searching..."
+
+msgid "mostrar"
+msgstr "show"
+
+msgid "ocultar"
+msgstr "hide"
+
+msgid "Cancelar"
+msgstr "Cancel"
+
+msgid "Bluetooth"
+msgstr "Bluetooth"
+
+msgid "Bluetooth iniciando..."
+msgstr "Bluetooth starting..."
+
+msgid "toque em Procurar"
+msgstr "tap Search"
+
+msgid "Música"
+msgstr "Music"
+
+msgid "⚙ Configurar"
+msgstr "⚙ Set up"
+
+msgid "sem /etc/revive/navidrome.conf"
+msgstr "no /etc/revive/navidrome.conf"
+
+msgid "Álbuns recentes"
+msgstr "Recent albums"
+
+msgid "Álbuns mais tocados"
+msgstr "Most played albums"
+
+msgid "Álbuns aleatórios"
+msgstr "Random albums"
+
+msgid "Músicas aleatórias"
+msgstr "Random songs"
+
+msgid "nada tocando"
+msgstr "nothing playing"
+
+msgid "vol −"
+msgstr "vol −"
+
+msgid "vol +"
+msgstr "vol +"
+
+msgid "▶ Tocar"
+msgstr "▶ Play"
+
+msgid "Aleatório"
+msgstr "Shuffle"
+
+msgid "◀ Voltar"
+msgstr "◀ Back"
+
+msgid "carregando..."
+msgstr "loading..."
+
+msgid "Mensagem"
+msgstr "Message"
+
+msgid "carregando original..."
+msgstr "loading original..."
+
+msgid "Aparência"
+msgstr "Appearance"
+
+msgid "Escuro"
+msgstr "Dark"
+
+msgid "Fundo escuro, confortável à noite e mais econômico."
+msgstr "Dark background, comfortable at night and more economical."
+
+msgid "Claro"
+msgstr "Light"
+
+msgid "Fundo claro, melhor de dia e em lugares iluminados."
+msgstr "Light background, better by day and in bright places."
+
+msgid "Tela inicial"
+msgstr "Home screen"
+
+msgid "Escolha quais apps aparecem e em que ordem."
+msgstr "Choose which apps appear and in what order."
+
+msgid "Idioma"
+msgstr "Language"
+
+msgid "Endereços (URL; vários separados por espaço: casa e fora)"
+msgstr "Addresses (URL; several separated by spaces: home and outside)"
+
+msgid "Usuário"
+msgstr "Username"
+
+msgid "Senha"
+msgstr "Password"
+
+msgid "toque para digitar"
+msgstr "tap to type"
+
+msgid "Testar e salvar"
+msgstr "Test and save"
+
+msgid "Cripto · 24 h"
+msgstr "Crypto · 24 h"
+
+msgid "US$ → R$"
+msgstr "US$ → R$"
+
+msgid "R$ → US$"
+msgstr "R$ → US$"
+
+msgid "Parear teclado"
+msgstr "Pair keyboard"
+
+msgid "carregando o clima..."
+msgstr "loading the weather..."
+
+msgid "a CoinGecko pediu uma pausa; tente em 1 minuto"
+msgstr "CoinGecko asked for a pause; try again in 1 minute"
+
+msgid "A conta tem verificação em duas etapas. Digite a senha."
+msgstr "The account has two-step verification. Enter the password."
+
+msgid "abrindo..."
+msgstr "opening..."
+
+msgid "Agora"
+msgstr "Now"
+
+msgid "aguarde..."
+msgstr "please wait..."
+
+msgid "Amanhã"
+msgstr "Tomorrow"
+
+msgid "artista"
+msgstr "artist"
+
+msgid "Artistas · {}"
+msgstr "Artists · {}"
+
+msgid "atualizado às {}"
+msgstr "updated at {}"
+
+msgid "Boa noite"
+msgstr "Good evening"
+
+msgid "Boa tarde"
+msgstr "Good afternoon"
+
+msgid "Bom dia"
+msgstr "Good morning"
+
+msgid "buscando..."
+msgstr "searching..."
+
+msgid "buscar música"
+msgstr "search music"
+
+msgid "carregando conversas..."
+msgstr "loading chats..."
+
+msgid "Clima"
+msgstr "Weather"
+
+msgid "conectado"
+msgstr "connected"
+
+msgid "conectado e salvo ✓"
+msgstr "connected and saved ✓"
+
+msgid "conectando a {}..."
+msgstr "connecting to {}..."
+
+msgid "conectando ao Telegram..."
+msgstr "connecting to Telegram..."
+
+msgid "conectando..."
+msgstr "connecting..."
+
+msgid "Conectar"
+msgstr "Connect"
+
+msgid "configure /etc/revive/painel.conf (lat, lon, cidade)"
+msgstr "configure /etc/revive/painel.conf (lat, lon, city)"
+
+msgid "Configure o Navidrome em ⚙ Ajustes"
+msgstr "Set up Navidrome in ⚙ Settings"
+
+msgid "Céu limpo"
+msgstr "Clear sky"
+
+msgid "código que chegou no Telegram"
+msgstr "code received on Telegram"
+
+msgid "desconectado"
+msgstr "disconnected"
+
+msgid "desconectando..."
+msgstr "disconnecting..."
+
+msgid "Digitar"
+msgstr "Type"
+
+msgid "Dom"
+msgstr "Sun"
+
+msgid "DOOM II"
+msgstr "DOOM II"
+
+msgid "Entre com a sua conta: toque em Digitar e escreva o telefone com DDI."
+msgstr "Sign in to your account: tap Type and enter the phone with country code."
+
+msgid "Enviar"
+msgstr "Send"
+
+msgid "erro"
+msgstr "error"
+
+msgid "erro: {}"
+msgstr "error: {}"
+
+msgid "espaço"
+msgstr "space"
+
+msgid "esquecido"
+msgstr "forgotten"
+
+msgid "Falta /etc/revive/telegram.conf (api_id e api_hash do my.telegram.org)."
+msgstr "Missing /etc/revive/telegram.conf (api_id and api_hash from my.telegram.org)."
+
+msgid "Garoa"
+msgstr "Drizzle"
+
+msgid "Hoje"
+msgstr "Today"
+
+msgid "mensagem"
+msgstr "message"
+
+msgid "máx {}"
+msgstr "max {}"
+
+msgid "mín {}"
+msgstr "min {}"
+
+msgid "nada aqui"
+msgstr "nothing here"
+
+msgid "Navidrome fora do ar"
+msgstr "Navidrome offline"
+
+msgid "Neblina"
+msgstr "Mist"
+
+msgid "nenhuma cidade encontrada"
+msgstr "no city found"
+
+msgid "nenhuma conversa"
+msgstr "no conversations"
+
+msgid "Neve"
+msgstr "Snow"
+
+msgid "nome da cidade"
+msgstr "city name"
+
+msgid "Nublado"
+msgstr "Cloudy"
+
+msgid "não carregou: {}"
+msgstr "failed to load: {}"
+
+msgid "não conectou: {}"
+msgstr "failed to connect: {}"
+
+msgid "não consegui salvar: {}"
+msgstr "could not save: {}"
+
+msgid "não tocou: {}"
+msgstr "did not play: {}"
+
+msgid "O Telegram mandou um código para a sua conta. Toque em Digitar."
+msgstr "Telegram sent a code to your account. Tap Type."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Painel"
+msgstr "Dashboard"
+
+msgid "Pancadas de chuva"
+msgstr "Rain showers"
+
+msgid "Parcialmente nublado"
+msgstr "Partly cloudy"
+
+msgid "pareado"
+msgstr "paired"
+
+msgid "pareando..."
+msgstr "pairing..."
+
+msgid "Poucas nuvens"
+msgstr "Few clouds"
+
+msgid "preencha a URL e o usuário"
+msgstr "fill in the URL and username"
+
+msgid "Qua"
+msgstr "Wed"
+
+msgid "Qui"
+msgstr "Thu"
+
+msgid "resposta inesperada"
+msgstr "unexpected response"
+
+msgid "Seg"
+msgstr "Mon"
+
+msgid "sem dados"
+msgstr "no data"
+
+msgid "sem preço"
+msgstr "no price"
+
+msgid "sem resposta"
+msgstr "no response"
+
+msgid "sem velas"
+msgstr "no candles"
+
+msgid "senha"
+msgstr "password"
+
+msgid "senha de duas etapas"
+msgstr "two-step password"
+
+msgid "senha de {}"
+msgstr "password for {}"
+
+msgid "Sensação {}°"
+msgstr "Feels like {}°"
+
+msgid "serviço revive-bt parado"
+msgstr "revive-bt service stopped"
+
+msgid "Sex"
+msgstr "Fri"
+
+msgid "Sáb"
+msgstr "Sat"
+
+msgid "telefone com DDI, ex.: +5511999999999"
+msgstr "phone with country code, e.g.: +5511999999999"
+
+msgid "Telegram"
+msgstr "Telegram"
+
+msgid "Ter"
+msgstr "Tue"
+
+msgid "testando..."
+msgstr "testing..."
+
+msgid "tocando..."
+msgstr "playing..."
+
+msgid "toque para parear"
+msgstr "tap to pair"
+
+msgid "Trovoadas"
+msgstr "Thunderstorms"
+
+msgid "url"
+msgstr "url"
+
+msgid "usuário"
+msgstr "username"
+
+msgid "volume {}%"
+msgstr "volume {}%"
+
+msgid "{} de {}"
+msgstr "{} of {}"
+
+msgid "{} do Navidrome"
+msgstr "{} from Navidrome"
+
+msgid "{} faixas"
+msgstr "{} tracks"
+
+msgid "{} mil"
+msgstr "{}k"
+
+msgid "{} músicas"
+msgstr "{} songs"
+
+msgid "{} · música"
+msgstr "{} · music"
+
+msgid "{} · {} faixas"
+msgstr "{} · {} tracks"
+
+msgid "{} · últimas 24 h"
+msgstr "{} · last 24 h"
+
+msgid "{} álbuns"
+msgstr "{} albums"
+
+msgid "{} → {}  ({})"
+msgstr "{} → {}  ({})"
+
+msgid "{}% em 24 h"
+msgstr "{}% in 24 h"
+
+msgid "Álbum"
+msgstr "Album"
+
+msgid "—"
+msgstr "—"
+
+msgid "▶ Tocar tudo"
+msgstr "▶ Play all"
+
+msgid "✉ {}: {}"
+msgstr "✉ {}: {}"

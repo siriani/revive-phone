@@ -123,7 +123,7 @@ export component TelaTocandoMat inherits Rectangle {
         y: 0px;
         width: 1280px;
         height: 96px;
-        title: "Tocando agora";
+        title: @tr("Tocando agora");
         leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
         trailing_button: { icon: @image-url("icones/queue_music.svg"), enabled: true };
         leading_button_clicked => { root.controle("voltar"); }
@@ -348,7 +348,7 @@ export component TelaFila inherits Rectangle {
         y: 0px;
         width: 1280px;
         height: 96px;
-        title: "Fila";
+        title: @tr("Fila");
         leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
         leading_button_clicked => { root.voltar(); }
     }
@@ -359,7 +359,7 @@ export component TelaFila inherits Rectangle {
         width: 1280px;
         height: 60px;
         visible: root.itens.length == 0;
-        text: "Fila vazia";
+        text: @tr("Fila vazia");
         font-size: Tema.texto-titulo;
         color: Tema.texto-sec;
         horizontal-alignment: center;
@@ -470,7 +470,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 96px;
         icone: @image-url("icones/home.svg");
-        rotulo: "Início";
+        rotulo: @tr("Início");
         ativo: root.atual == "home";
         clicado => { root.ir("home"); }
     }
@@ -479,7 +479,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 180px;
         icone: @image-url("icones/search.svg");
-        rotulo: "Buscar";
+        rotulo: @tr("Buscar");
         ativo: root.atual == "buscar";
         clicado => { root.ir("buscar"); }
     }
@@ -488,7 +488,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 264px;
         icone: @image-url("icones/person.svg");
-        rotulo: "Artistas";
+        rotulo: @tr("Artistas");
         ativo: root.atual == "artistas";
         clicado => { root.ir("artistas"); }
     }
@@ -497,7 +497,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 348px;
         icone: @image-url("icones/library_music.svg");
-        rotulo: "Playlists";
+        rotulo: @tr("Playlists");
         ativo: root.atual == "playlists";
         clicado => { root.ir("playlists"); }
     }
@@ -506,7 +506,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 432px;
         icone: @image-url("icones/favorite.svg");
-        rotulo: "Favoritas";
+        rotulo: @tr("Favoritas");
         ativo: root.atual == "favoritas";
         clicado => { root.ir("favoritas"); }
     }
@@ -515,7 +515,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 516px;
         icone: @image-url("icones/queue_music.svg");
-        rotulo: "Fila";
+        rotulo: @tr("Fila");
         ativo: root.atual == "fila";
         clicado => { root.ir("fila"); }
     }
@@ -524,7 +524,7 @@ export component RailMusica inherits Rectangle {
         x: 0px;
         y: 630px;
         icone: @image-url("icones/settings.svg");
-        rotulo: "Ajustes";
+        rotulo: @tr("Ajustes");
         ativo: root.atual == "ajustes";
         clicado => { root.ir("ajustes"); }
     }
@@ -787,7 +787,7 @@ export component MusicaInicioMat inherits Rectangle {
     in property <[Album]> novidades;
     in property <[Album]> aleatorios;
     in property <string> mensagem;
-    in property <string> saudacao: "Olá";
+    in property <string> saudacao: @tr("Olá");
     in property <bool> toc-ativo;
     callback abrir-album(string, int);
     callback navegar(string);
@@ -833,7 +833,7 @@ export component MusicaInicioMat inherits Rectangle {
             y: 26px;
             width: 220px;
             icone: @image-url("icones/shuffle.svg");
-            texto: "Aleatórias";
+            texto: @tr("Aleatórias");
             clicado => { root.navegar("aleatorias"); }
         }
 
@@ -842,7 +842,7 @@ export component MusicaInicioMat inherits Rectangle {
             y: 26px;
             width: 200px;
             icone: @image-url("icones/favorite.svg");
-            texto: "Favoritas";
+            texto: @tr("Favoritas");
             clicado => { root.navegar("favoritas"); }
         }
 
@@ -853,7 +853,7 @@ export component MusicaInicioMat inherits Rectangle {
             width: 1096px;
             height: 44px;
             visible: root.recentes.length > 0;
-            text: "Acesso rápido";
+            text: @tr("Acesso rápido");
             font-size: 34px;
             font-family: "DejaVu Sans Bold";
             color: Tema.texto;
@@ -936,7 +936,7 @@ export component MusicaInicioMat inherits Rectangle {
             x: 32px;
             y: root.recentes.length > 0 ? 376px : 112px;
             width: 1096px;
-            titulo: "Mais tocados";
+            titulo: @tr("Mais tocados");
             albuns: root.frequentes;
             abrir(i) => { root.abrir-album("frequentes", i); }
         }
@@ -945,7 +945,7 @@ export component MusicaInicioMat inherits Rectangle {
             x: 32px;
             y: s1.y + s1.height;
             width: 1096px;
-            titulo: "Adicionados recentemente";
+            titulo: @tr("Adicionados recentemente");
             albuns: root.novidades;
             abrir(i) => { root.abrir-album("novidades", i); }
         }
@@ -954,7 +954,7 @@ export component MusicaInicioMat inherits Rectangle {
             x: 32px;
             y: s2.y + s2.height;
             width: 1096px;
-            titulo: "Descubra";
+            titulo: @tr("Descubra");
             albuns: root.aleatorios;
             abrir(i) => { root.abrir-album("aleatorios", i); }
         }
@@ -989,7 +989,7 @@ export component MusicaInicioMat inherits Rectangle {
             y: 0px;
             width: parent.width;
             height: parent.height;
-            text: "Configurar";
+            text: @tr("Configurar");
             font-size: 26px;
             font-family: "DejaVu Sans Bold";
             color: Tema.sobre-destaque;

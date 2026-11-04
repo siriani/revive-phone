@@ -7,6 +7,8 @@ use std::time::Duration;
 use serde_json::Value;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
+use crate::i18n;
+
 const API: &str = "https://api.coingecko.com/api/v3";
 
 fn agente() -> ureq::Agent {
@@ -19,7 +21,7 @@ fn json(url: &str) -> Result<Value, String> {
         .header("User-Agent", "revive")
         .call()
         .map_err(|e| match e {
-            ureq::Error::StatusCode(429) => "a CoinGecko pediu uma pausa; tente em 1 minuto".to_string(),
+            ureq::Error::StatusCode(429) => i18n::t("a CoinGecko pediu uma pausa; tente em 1 minuto"),
             e => e.to_string(),
         })?
         .body_mut()
@@ -56,7 +58,7 @@ pub fn trocar_moeda() -> String {
 pub fn mercado(moeda: &str) -> Result<Vec<Moeda>, String> {
     let v = json(&format!("{API}/coins/markets?vs_currency={moeda}&per_page=8&price_change_percentage=24h"))?;
     Ok(v.as_array()
-        .ok_or("resposta inesperada")?
+        .ok_or_else(|| i18n::t("resposta inesperada"))?
         .iter()
         .map(|m| Moeda {
             id: m["id"].as_str().unwrap_or("").into(),
@@ -112,7 +114,7 @@ pub fn grafico(id: &str, moeda: &str) -> Result<Grafico, String> {
     let v = json(&format!("{API}/coins/{id}/ohlc?vs_currency={moeda}&days=1"))?;
     let velas: Vec<[f64; 4]> = v
         .as_array()
-        .ok_or("sem dados")?
+        .ok_or_else(|| i18n::t("sem dados"))?
         .iter()
         .filter_map(|c| {
             let c = c.as_array()?;
@@ -120,7 +122,7 @@ pub fn grafico(id: &str, moeda: &str) -> Result<Grafico, String> {
         })
         .collect();
     if velas.is_empty() {
-        return Err("sem velas".into());
+        return Err(i18n::t("sem velas"));
     }
     let maximo = velas.iter().map(|c| c[1]).fold(f64::MIN, f64::max);
     let minimo = velas.iter().map(|c| c[2]).fold(f64::MAX, f64::min);

@@ -1,0 +1,555 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Umidade"
+msgstr ""
+
+msgid "Vento"
+msgstr ""
+
+msgid "Chuva"
+msgstr ""
+
+msgid "UV"
+msgstr ""
+
+msgid "Nascer"
+msgstr ""
+
+msgid "Pôr do sol"
+msgstr ""
+
+msgid "Próximas 24 horas"
+msgstr ""
+
+msgid "Próximos 7 dias"
+msgstr ""
+
+msgid "Escolher cidade"
+msgstr ""
+
+msgid "Atualizando..."
+msgstr ""
+
+msgid "Toque para digitar o nome da cidade"
+msgstr ""
+
+msgid "Nada tocando · toque para abrir a Música"
+msgstr ""
+
+msgid "Cripto"
+msgstr ""
+
+msgid "{n} mensagem não lida"
+msgid_plural "{n} mensagens não lidas"
+msgstr[0] ""
+msgstr[1] ""
+
+msgid "Organizar início"
+msgstr ""
+
+msgid "Toque no olho para mostrar ou ocultar; use as setas para mudar a ordem."
+msgstr ""
+
+msgid "Tocando agora"
+msgstr ""
+
+msgid "Fila"
+msgstr ""
+
+msgid "Fila vazia"
+msgstr ""
+
+msgid "Início"
+msgstr ""
+
+msgid "Buscar"
+msgstr ""
+
+msgid "Artistas"
+msgstr ""
+
+msgid "Playlists"
+msgstr ""
+
+msgid "Favoritas"
+msgstr ""
+
+msgid "Ajustes"
+msgstr ""
+
+msgid "Olá"
+msgstr ""
+
+msgid "Aleatórias"
+msgstr ""
+
+msgid "Acesso rápido"
+msgstr ""
+
+msgid "Mais tocados"
+msgstr ""
+
+msgid "Adicionados recentemente"
+msgstr ""
+
+msgid "Descubra"
+msgstr ""
+
+msgid "Configurar"
+msgstr ""
+
+msgid "Wi-Fi"
+msgstr ""
+
+msgid "Atualizar preço"
+msgstr ""
+
+msgid "◀ Início"
+msgstr ""
+
+msgid "Wi-Fi: {}"
+msgstr ""
+
+msgid "Wi-Fi desconectado"
+msgstr ""
+
+msgid "Redes Wi-Fi"
+msgstr ""
+
+msgid "procurando..."
+msgstr ""
+
+msgid "mostrar"
+msgstr ""
+
+msgid "ocultar"
+msgstr ""
+
+msgid "Cancelar"
+msgstr ""
+
+msgid "Bluetooth"
+msgstr ""
+
+msgid "Bluetooth iniciando..."
+msgstr ""
+
+msgid "toque em Procurar"
+msgstr ""
+
+msgid "Música"
+msgstr ""
+
+msgid "⚙ Configurar"
+msgstr ""
+
+msgid "sem /etc/revive/navidrome.conf"
+msgstr ""
+
+msgid "Álbuns recentes"
+msgstr ""
+
+msgid "Álbuns mais tocados"
+msgstr ""
+
+msgid "Álbuns aleatórios"
+msgstr ""
+
+msgid "Músicas aleatórias"
+msgstr ""
+
+msgid "nada tocando"
+msgstr ""
+
+msgid "vol −"
+msgstr ""
+
+msgid "vol +"
+msgstr ""
+
+msgid "▶ Tocar"
+msgstr ""
+
+msgid "Aleatório"
+msgstr ""
+
+msgid "◀ Voltar"
+msgstr ""
+
+msgid "carregando..."
+msgstr ""
+
+msgid "Mensagem"
+msgstr ""
+
+msgid "carregando original..."
+msgstr ""
+
+msgid "Aparência"
+msgstr ""
+
+msgid "Escuro"
+msgstr ""
+
+msgid "Fundo escuro, confortável à noite e mais econômico."
+msgstr ""
+
+msgid "Claro"
+msgstr ""
+
+msgid "Fundo claro, melhor de dia e em lugares iluminados."
+msgstr ""
+
+msgid "Tela inicial"
+msgstr ""
+
+msgid "Escolha quais apps aparecem e em que ordem."
+msgstr ""
+
+msgid "Idioma"
+msgstr ""
+
+msgid "Endereços (URL; vários separados por espaço: casa e fora)"
+msgstr ""
+
+msgid "Usuário"
+msgstr ""
+
+msgid "Senha"
+msgstr ""
+
+msgid "toque para digitar"
+msgstr ""
+
+msgid "Testar e salvar"
+msgstr ""
+
+msgid "Cripto · 24 h"
+msgstr ""
+
+msgid "US$ → R$"
+msgstr ""
+
+msgid "R$ → US$"
+msgstr ""
+
+msgid "Parear teclado"
+msgstr ""
+
+msgid "carregando o clima..."
+msgstr ""
+
+msgid "a CoinGecko pediu uma pausa; tente em 1 minuto"
+msgstr ""
+
+msgid "A conta tem verificação em duas etapas. Digite a senha."
+msgstr ""
+
+msgid "abrindo..."
+msgstr ""
+
+msgid "Agora"
+msgstr ""
+
+msgid "aguarde..."
+msgstr ""
+
+msgid "Amanhã"
+msgstr ""
+
+msgid "artista"
+msgstr ""
+
+msgid "Artistas · {}"
+msgstr ""
+
+msgid "atualizado às {}"
+msgstr ""
+
+msgid "Boa noite"
+msgstr ""
+
+msgid "Boa tarde"
+msgstr ""
+
+msgid "Bom dia"
+msgstr ""
+
+msgid "buscando..."
+msgstr ""
+
+msgid "buscar música"
+msgstr ""
+
+msgid "carregando conversas..."
+msgstr ""
+
+msgid "Clima"
+msgstr ""
+
+msgid "conectado"
+msgstr ""
+
+msgid "conectado e salvo ✓"
+msgstr ""
+
+msgid "conectando a {}..."
+msgstr ""
+
+msgid "conectando ao Telegram..."
+msgstr ""
+
+msgid "conectando..."
+msgstr ""
+
+msgid "Conectar"
+msgstr ""
+
+msgid "configure /etc/revive/painel.conf (lat, lon, cidade)"
+msgstr ""
+
+msgid "Configure o Navidrome em ⚙ Ajustes"
+msgstr ""
+
+msgid "Céu limpo"
+msgstr ""
+
+msgid "código que chegou no Telegram"
+msgstr ""
+
+msgid "desconectado"
+msgstr ""
+
+msgid "desconectando..."
+msgstr ""
+
+msgid "Digitar"
+msgstr ""
+
+msgid "Dom"
+msgstr ""
+
+msgid "DOOM II"
+msgstr ""
+
+msgid "Entre com a sua conta: toque em Digitar e escreva o telefone com DDI."
+msgstr ""
+
+msgid "Enviar"
+msgstr ""
+
+msgid "erro"
+msgstr ""
+
+msgid "erro: {}"
+msgstr ""
+
+msgid "espaço"
+msgstr ""
+
+msgid "esquecido"
+msgstr ""
+
+msgid "Falta /etc/revive/telegram.conf (api_id e api_hash do my.telegram.org)."
+msgstr ""
+
+msgid "Garoa"
+msgstr ""
+
+msgid "Hoje"
+msgstr ""
+
+msgid "mensagem"
+msgstr ""
+
+msgid "máx {}"
+msgstr ""
+
+msgid "mín {}"
+msgstr ""
+
+msgid "nada aqui"
+msgstr ""
+
+msgid "Navidrome fora do ar"
+msgstr ""
+
+msgid "Neblina"
+msgstr ""
+
+msgid "nenhuma cidade encontrada"
+msgstr ""
+
+msgid "nenhuma conversa"
+msgstr ""
+
+msgid "Neve"
+msgstr ""
+
+msgid "nome da cidade"
+msgstr ""
+
+msgid "Nublado"
+msgstr ""
+
+msgid "não carregou: {}"
+msgstr ""
+
+msgid "não conectou: {}"
+msgstr ""
+
+msgid "não consegui salvar: {}"
+msgstr ""
+
+msgid "não tocou: {}"
+msgstr ""
+
+msgid "O Telegram mandou um código para a sua conta. Toque em Digitar."
+msgstr ""
+
+msgid "OK"
+msgstr ""
+
+msgid "Painel"
+msgstr ""
+
+msgid "Pancadas de chuva"
+msgstr ""
+
+msgid "Parcialmente nublado"
+msgstr ""
+
+msgid "pareado"
+msgstr ""
+
+msgid "pareando..."
+msgstr ""
+
+msgid "Poucas nuvens"
+msgstr ""
+
+msgid "preencha a URL e o usuário"
+msgstr ""
+
+msgid "Qua"
+msgstr ""
+
+msgid "Qui"
+msgstr ""
+
+msgid "resposta inesperada"
+msgstr ""
+
+msgid "Seg"
+msgstr ""
+
+msgid "sem dados"
+msgstr ""
+
+msgid "sem preço"
+msgstr ""
+
+msgid "sem resposta"
+msgstr ""
+
+msgid "sem velas"
+msgstr ""
+
+msgid "senha"
+msgstr ""
+
+msgid "senha de duas etapas"
+msgstr ""
+
+msgid "senha de {}"
+msgstr ""
+
+msgid "Sensação {}°"
+msgstr ""
+
+msgid "serviço revive-bt parado"
+msgstr ""
+
+msgid "Sex"
+msgstr ""
+
+msgid "Sáb"
+msgstr ""
+
+msgid "telefone com DDI, ex.: +5511999999999"
+msgstr ""
+
+msgid "Telegram"
+msgstr ""
+
+msgid "Ter"
+msgstr ""
+
+msgid "testando..."
+msgstr ""
+
+msgid "tocando..."
+msgstr ""
+
+msgid "toque para parear"
+msgstr ""
+
+msgid "Trovoadas"
+msgstr ""
+
+msgid "url"
+msgstr ""
+
+msgid "usuário"
+msgstr ""
+
+msgid "volume {}%"
+msgstr ""
+
+msgid "{} de {}"
+msgstr ""
+
+msgid "{} do Navidrome"
+msgstr ""
+
+msgid "{} faixas"
+msgstr ""
+
+msgid "{} mil"
+msgstr ""
+
+msgid "{} músicas"
+msgstr ""
+
+msgid "{} · música"
+msgstr ""
+
+msgid "{} · {} faixas"
+msgstr ""
+
+msgid "{} · últimas 24 h"
+msgstr ""
+
+msgid "{} álbuns"
+msgstr ""
+
+msgid "{} → {}  ({})"
+msgstr ""
+
+msgid "{}% em 24 h"
+msgstr ""
+
+msgid "Álbum"
+msgstr ""
+
+msgid "—"
+msgstr ""
+
+msgid "▶ Tocar tudo"
+msgstr ""
+
+msgid "✉ {}: {}"
+msgstr ""

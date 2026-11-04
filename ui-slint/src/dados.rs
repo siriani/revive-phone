@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::i18n;
+
 const WPA_CTRL: &str = "/run/revive-wpa";
 const IFACE: &str = "wlan0";
 const BT_STATE: &str = "/run/revive-bt/state.json";
@@ -74,7 +76,7 @@ pub fn btc() -> Result<Btc, String> {
         .map_err(|e| e.to_string())?;
     let b = &v["bitcoin"];
     Ok(Btc {
-        brl: b["brl"].as_f64().ok_or("sem preço")?,
+        brl: b["brl"].as_f64().ok_or_else(|| i18n::t("sem preço"))?,
         usd: b["usd"].as_f64().unwrap_or(0.0),
         variacao: b["brl_24h_change"].as_f64().or(b["usd_24h_change"].as_f64()),
     })

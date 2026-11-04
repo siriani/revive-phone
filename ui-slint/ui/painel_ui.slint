@@ -451,7 +451,7 @@ export component PainelMat inherits Rectangle {
                 y: 40px;
                 width: 370px;
                 height: 160px;
-                text: "Nada tocando · toque para abrir a Música";
+                text: @tr("Nada tocando · toque para abrir a Música");
                 font-size: 26px;
                 color: Tema.texto-sec;
                 wrap: word-wrap;
@@ -482,7 +482,7 @@ export component PainelMat inherits Rectangle {
                 y: 20px;
                 width: 540px;
                 height: 40px;
-                text: "Cripto";
+                text: @tr("Cripto");
                 font-size: 26px;
                 font-family: "DejaVu Sans Bold";
                 color: Tema.texto-sec;
@@ -566,7 +566,7 @@ export component PainelMat inherits Rectangle {
                 y: 28px;
                 width: 470px;
                 height: 40px;
-                text: root.tg-nao-lidas == 1 ? "1 mensagem não lida" : "\{root.tg-nao-lidas} mensagens não lidas";
+                text: @tr("{n} mensagem não lida" | "{n} mensagens não lidas" % root.tg-nao-lidas);
                 font-size: 26px;
                 color: Tema.texto;
                 overflow: elide;

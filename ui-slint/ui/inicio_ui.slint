@@ -65,7 +65,7 @@ export component TelaOrganizar inherits Rectangle {
         y: 0px;
         width: 1280px;
         height: 96px;
-        title: "Organizar início";
+        title: @tr("Organizar início");
         leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
         leading_button_clicked => { root.voltar(); }
     }
@@ -75,7 +75,7 @@ export component TelaOrganizar inherits Rectangle {
         y: 104px;
         width: 1216px;
         height: 40px;
-        text: "Toque no olho para mostrar ou ocultar; use as setas para mudar a ordem.";
+        text: @tr("Toque no olho para mostrar ou ocultar; use as setas para mudar a ordem.");
         font-size: Tema.texto-corpo;
         color: Tema.texto-sec;
         overflow: elide;

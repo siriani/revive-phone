@@ -5,6 +5,8 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
+use crate::i18n;
+
 const CONF: &str = "/etc/revive/painel.conf";
 const CACHE: &str = "/var/cache/revive/clima.json";
 const VALIDADE: Duration = Duration::from_secs(30 * 60);
@@ -83,7 +85,8 @@ pub struct Hora {
 }
 
 pub fn clima() -> Result<Clima, String> {
-    let (lat, lon, cidade) = ler_conf().ok_or("configure /etc/revive/painel.conf (lat, lon, cidade)")?;
+    let (lat, lon, cidade) =
+        ler_conf().ok_or_else(|| i18n::t("configure /etc/revive/painel.conf (lat, lon, cidade)"))?;
     // cache novo: nem toca na rede
     if cache_fresco() {
         if let Ok(texto) = std::fs::read_to_string(CACHE) {
@@ -108,7 +111,7 @@ pub fn clima() -> Result<Clima, String> {
 fn montar(cidade: &str, texto: &str) -> Result<Clima, String> {
     let v: Value = serde_json::from_str(texto).map_err(|e| e.to_string())?;
     let atual = &v["current"];
-    let agora = atual["time"].as_str().ok_or("resposta inesperada")?;
+    let agora = atual["time"].as_str().ok_or_else(|| i18n::t("resposta inesperada"))?;
     let codigo = atual["weather_code"].as_i64().unwrap_or(0);
     let dia = atual["is_day"].as_i64().unwrap_or(1) != 0;
     let previsao = &v["daily"];
@@ -136,7 +139,7 @@ fn montar(cidade: &str, texto: &str) -> Result<Clima, String> {
         temp: atual["temperature_2m"].as_f64().unwrap_or(0.0).round() as i32,
         max: numero(&previsao["temperature_2m_max"], 0).round() as i32,
         min: numero(&previsao["temperature_2m_min"], 0).round() as i32,
-        descricao: descricao(codigo).to_string(),
+        descricao: descricao(codigo),
         icone: icone(codigo, dia),
         proximas,
     })
@@ -147,20 +150,20 @@ fn numero(lista: &Value, i: usize) -> f64 {
     lista.get(i).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-fn descricao(codigo: i64) -> &'static str {
+fn descricao(codigo: i64) -> String {
     match codigo {
-        0 => "Céu limpo",
-        1 => "Poucas nuvens",
-        2 => "Parcialmente nublado",
-        3 => "Nublado",
-        45 | 48 => "Neblina",
-        51..=57 => "Garoa",
-        61..=67 => "Chuva",
-        71..=77 => "Neve",
-        80..=82 => "Pancadas de chuva",
-        85 | 86 => "Neve",
-        95..=99 => "Trovoadas",
-        _ => "—",
+        0 => i18n::t("Céu limpo"),
+        1 => i18n::t("Poucas nuvens"),
+        2 => i18n::t("Parcialmente nublado"),
+        3 => i18n::t("Nublado"),
+        45 | 48 => i18n::t("Neblina"),
+        51..=57 => i18n::t("Garoa"),
+        61..=67 => i18n::t("Chuva"),
+        71..=77 => i18n::t("Neve"),
+        80..=82 => i18n::t("Pancadas de chuva"),
+        85 | 86 => i18n::t("Neve"),
+        95..=99 => i18n::t("Trovoadas"),
+        _ => i18n::t("—"),
     }
 }
 
@@ -268,7 +271,8 @@ fn buscar_completo(lat: &str, lon: &str) -> Result<String, String> {
 
 /// Temperatura, sensação, 24 horas e 7 dias; mesmo cache de 30 min do resumo.
 pub fn previsao() -> Result<Previsao, String> {
-    let (lat, lon, cidade) = ler_conf().ok_or("configure /etc/revive/painel.conf (lat, lon, cidade)")?;
+    let (lat, lon, cidade) =
+        ler_conf().ok_or_else(|| i18n::t("configure /etc/revive/painel.conf (lat, lon, cidade)"))?;
     if fresco(CACHE_COMPLETO) {
         if let Ok(texto) = std::fs::read_to_string(CACHE_COMPLETO) {
             if let Ok(p) = montar_previsao(&cidade, &texto) {
@@ -303,35 +307,35 @@ fn hora_curta(iso: &str) -> String {
     iso.get(11..16).unwrap_or("").to_string()
 }
 
-/// Abreviação pt-BR do dia da semana; "" se a data for inválida.
-fn dia_semana(data: &str) -> &'static str {
+/// Abreviação do dia da semana; "" se a data for inválida.
+fn dia_semana(data: &str) -> String {
     use chrono::Datelike;
     let Ok(d) = chrono::NaiveDate::parse_from_str(data, "%Y-%m-%d") else {
-        return "";
+        return String::new();
     };
     match d.weekday().num_days_from_monday() {
-        0 => "Seg",
-        1 => "Ter",
-        2 => "Qua",
-        3 => "Qui",
-        4 => "Sex",
-        5 => "Sáb",
-        _ => "Dom",
+        0 => i18n::t("Seg"),
+        1 => i18n::t("Ter"),
+        2 => i18n::t("Qua"),
+        3 => i18n::t("Qui"),
+        4 => i18n::t("Sex"),
+        5 => i18n::t("Sáb"),
+        _ => i18n::t("Dom"),
     }
 }
 
 fn nome_dia(i: usize, data: &str) -> String {
     match i {
-        0 => "Hoje".to_string(),
-        1 => "Amanhã".to_string(),
-        _ => dia_semana(data).to_string(),
+        0 => i18n::t("Hoje"),
+        1 => i18n::t("Amanhã"),
+        _ => dia_semana(data),
     }
 }
 
 fn montar_previsao(cidade: &str, texto: &str) -> Result<Previsao, String> {
     let v: Value = serde_json::from_str(texto).map_err(|e| e.to_string())?;
     let atual = &v["current"];
-    let agora = atual["time"].as_str().ok_or("resposta inesperada")?;
+    let agora = atual["time"].as_str().ok_or_else(|| i18n::t("resposta inesperada"))?;
     let codigo = atual["weather_code"].as_i64().unwrap_or(0);
     let dia = atual["is_day"].as_i64().unwrap_or(1) != 0;
     let horaria = &v["hourly"];
@@ -347,7 +351,7 @@ fn montar_previsao(cidade: &str, texto: &str) -> Result<Previsao, String> {
         let hh = iso.get(11..13).unwrap_or("");
         let claro = horaria["is_day"].get(i).and_then(Value::as_f64).unwrap_or(1.0) != 0.0;
         horas.push(HoraPrev {
-            hora: if primeira { "Agora".to_string() } else { format!("{hh}h") },
+            hora: if primeira { i18n::t("Agora") } else { format!("{hh}h") },
             temp: numero(&horaria["temperature_2m"], i).round() as i32,
             icone: icone(numero(&horaria["weather_code"], i) as i64, claro),
             chuva: numero(&horaria["precipitation_probability"], i).round() as i32,
@@ -374,7 +378,7 @@ fn montar_previsao(cidade: &str, texto: &str) -> Result<Previsao, String> {
         sensacao: atual["apparent_temperature"].as_f64().unwrap_or(0.0).round() as i32,
         umidade: atual["relative_humidity_2m"].as_f64().unwrap_or(0.0).round() as i32,
         vento: atual["wind_speed_10m"].as_f64().unwrap_or(0.0).round() as i32,
-        descricao: descricao(codigo).to_string(),
+        descricao: descricao(codigo),
         icone: icone(codigo, dia),
         chuva_hoje: numero(&diaria["precipitation_probability_max"], 0).round() as i32,
         uv: numero(&diaria["uv_index_max"], 0).round() as i32,

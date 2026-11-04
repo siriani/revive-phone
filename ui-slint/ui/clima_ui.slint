@@ -184,42 +184,42 @@ export component TelaClima inherits Rectangle {
             x: 24px;
             y: 372px;
             icone: @image-url("icones/humidity_percentage.svg");
-            rotulo: "Umidade";
+            rotulo: @tr("Umidade");
             valor: root.umidade;
         }
         CartaoClima {
             x: 284px;
             y: 372px;
             icone: @image-url("icones/air.svg");
-            rotulo: "Vento";
+            rotulo: @tr("Vento");
             valor: root.vento;
         }
         CartaoClima {
             x: 24px;
             y: 480px;
             icone: @image-url("icones/water_drop.svg");
-            rotulo: "Chuva";
+            rotulo: @tr("Chuva");
             valor: root.chuva;
         }
         CartaoClima {
             x: 284px;
             y: 480px;
             icone: @image-url("icones/wb_sunny.svg");
-            rotulo: "UV";
+            rotulo: @tr("UV");
             valor: root.uv;
         }
         CartaoClima {
             x: 24px;
             y: 588px;
             icone: @image-url("icones/wb_twilight.svg");
-            rotulo: "Nascer";
+            rotulo: @tr("Nascer");
             valor: root.nascer;
         }
         CartaoClima {
             x: 284px;
             y: 588px;
             icone: @image-url("icones/wb_twilight.svg");
-            rotulo: "Pôr do sol";
+            rotulo: @tr("Pôr do sol");
             valor: root.por;
         }
 
@@ -239,7 +239,7 @@ export component TelaClima inherits Rectangle {
                 y: 12px;
                 width: 664px;
                 height: 36px;
-                text: "Próximas 24 horas";
+                text: @tr("Próximas 24 horas");
                 font-size: 26px;
                 color: Tema.texto-sec;
                 vertical-alignment: center;
@@ -321,7 +321,7 @@ export component TelaClima inherits Rectangle {
                 y: 12px;
                 width: 664px;
                 height: 34px;
-                text: "Próximos 7 dias";
+                text: @tr("Próximos 7 dias");
                 font-size: 26px;
                 color: Tema.texto-sec;
                 vertical-alignment: center;
@@ -447,7 +447,7 @@ export component TelaClima inherits Rectangle {
             y: 0px;
             width: 300px;
             height: 72px;
-            text: "Escolher cidade";
+            text: @tr("Escolher cidade");
             font-size: 26px;
             color: Tema.sobre-destaque;
             horizontal-alignment: center;
@@ -496,7 +496,7 @@ export component TelaClima inherits Rectangle {
         y: 30px;
         width: 300px;
         height: 40px;
-        text: "Atualizando...";
+        text: @tr("Atualizando...");
         font-size: 21px;
         color: Tema.texto-sec;
         horizontal-alignment: right;
@@ -551,7 +551,7 @@ export component TelaCidade inherits Rectangle {
         y: 24px;
         width: 1100px;
         height: 48px;
-        text: "Escolher cidade";
+        text: @tr("Escolher cidade");
         font-size: 36px;
         font-family: "DejaVu Sans Bold";
         color: Tema.texto;
@@ -584,7 +584,7 @@ export component TelaCidade inherits Rectangle {
             y: 20px;
             width: 1100px;
             height: 48px;
-            text: root.busca != "" ? root.busca : "Toque para digitar o nome da cidade";
+            text: root.busca != "" ? root.busca : @tr("Toque para digitar o nome da cidade");
             font-size: 34px;
             color: root.busca != "" ? Tema.texto : Tema.texto-sec;
             overflow: elide;

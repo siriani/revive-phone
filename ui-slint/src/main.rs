@@ -8,6 +8,7 @@ mod app;
 mod clima;
 mod cripto;
 mod dados;
+mod i18n;
 mod doom;
 mod inicio;
 mod manifesto;
@@ -110,6 +111,10 @@ fn main() {
         .unwrap();
 
     let ui = AppWindow::new().unwrap();
+    // idioma escolhido em Ajustes (traduções .po embutidas; "pt" é o texto original)
+    if let Err(e) = slint::select_bundled_translation(&i18n::idioma()) {
+        eprintln!("idioma {}: {e:?}", i18n::idioma());
+    }
     app::ligar(&ui);
     ui.show().unwrap();
 

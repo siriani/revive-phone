@@ -107,7 +107,7 @@ pub fn saiu() -> bool {
 
 /// A thread do motor não pode ser reiniciada no mesmo processo: recomeça o
 /// revive-ui do zero (mesmo que o script fazia antes com rc-service).
-fn reiniciar() -> ! {
+pub fn reiniciar() -> ! {
     eprintln!("doom: jogo encerrado, reiniciando o revive-ui");
     let exe = CString::new("/proc/self/exe").unwrap();
     let mut args: Vec<CString> = std::env::args_os()
