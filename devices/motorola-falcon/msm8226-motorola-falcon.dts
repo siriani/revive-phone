@@ -32,12 +32,15 @@
 			vsp-supply = <&reg_lcd_pos>;
 			vsn-supply = <&reg_lcd_neg>;
 			vddio-supply = <&vddio_disp_vreg>;
-			/* BYTE0/PCLK0 vêm do PLL do DSI (desabilitado aqui): o bootloader os deixa ligados */
+			/* simplefb mantido: o msm assume depois. BYTE0/PCLK0 precisam estar aqui;
+			 * sem simplefb o msm trava ao ler o PLL da DSI. */
 			clocks = <&mmcc MDSS_AHB_CLK>,
 				 <&mmcc MDSS_AXI_CLK>,
+				 <&mmcc MDSS_BYTE0_CLK>,
 				 <&mmcc MDSS_ESC0_CLK>,
 				 <&mmcc MDSS_MDP_CLK>,
 				 <&mmcc MMSS_MISC_AHB_CLK>,
+				 <&mmcc MDSS_PCLK0_CLK>,
 				 <&mmcc MDSS_VSYNC_CLK>;
 			power-domains = <&mmcc MDSS_GDSC>;
 		};
@@ -456,6 +459,7 @@
 
 	iris {
 		compatible = "qcom,wcn3620";
+		/* local-bd-address = [XX XX XX XX XX XX];   placeholder: endereço Bluetooth do aparelho, nunca publicar */
 		vddxo-supply = <&pm8226_l10>;
 		vddrfa-supply = <&pm8226_l24>;
 		vddpa-supply = <&pm8226_l16>;
@@ -582,5 +586,71 @@
 
 	firmware-name = "mba.b00", "modem.mdt";
 
+	status = "okay";
+};
+
+/* Tela: painel CMI 720p (vídeo, 2 lanes), driver msm/DRM. Driver do painel: patches/0002 */
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&pm8226_l4>;
+	vddio-supply = <&pm8226_l8>;
+
+	panel@0 {
+		compatible = "motorola,falcon-panel-cmi";
+		reg = <0>;
+
+		/* original: qcom,platform-reset-gpio = <8 25 0> (ativo alto) */
+		reset-gpios = <&tlmm 25 GPIO_ACTIVE_HIGH>;
+		vddio-supply = <&vddio_disp_vreg>;
+		vdd-supply = <&pm8226_l28>;
+		vsp-supply = <&reg_lcd_pos>;
+		vsn-supply = <&reg_lcd_neg>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1>;
+};
+
+&mdss_dsi0_phy {
+	vddio-supply = <&pm8226_l8>;
+};
+
+/* Luz de fundo: WLED do PM8226 (qcom_wled) */
+&pm8226_1 {
+	pm8226_wled: wled@d800 {
+		compatible = "qcom,pm8941-wled";
+		reg = <0xd800>;
+		label = "backlight";
+		status = "okay";
+
+		default-brightness = <2048>;
+		qcom,cs-out;
+		qcom,current-limit = <18>;
+		qcom,current-boost-limit = <805>;
+		qcom,switching-freq = <1600>;
+		qcom,ovp = <29>;
+		qcom,num-strings = <1>;
+	};
+};
+
+/* GPU Adreno 305: Mesa freedreno (FD305). Firmware a300_pm4/pfp do linux-firmware */
+&gpu {
+	status = "okay";
+};
+
+/* ADSP (LPASS): firmware extraído do aparelho (não distribuído) */
+&adsp {
+	firmware-name = "qcom/msm8226/motorola/falcon/adsp.mdt";
 	status = "okay";
 };
