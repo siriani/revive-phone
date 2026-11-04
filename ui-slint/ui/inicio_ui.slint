@@ -1,0 +1,194 @@
+// Revive: tela "Organizar início" (Slint). Paisagem 1280x720, renderizador por software.
+// Mostra/oculta e reordena os apps do lançador. Tudo com x/y explícitos (sem layouts),
+// fontes só 26/34px, alvos de toque de 72px.
+
+import { AppBar } from "@material";
+import { Tema } from "tema.slint";
+
+export struct AppOrdem { id: string, nome: string, icone: string, cor: color, visivel: bool }
+
+// Botão de ícone próprio (mesmo desenho do musica_ui.slint), 72x72 com ícone tingido.
+// Desabilitado (ativo: false) fica apagado e não responde ao toque.
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    in property <bool> ativo: true;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : #00000000;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.ativo ? root.cor : root.cor.with-alpha(0.3);
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.ativo;
+        clicked => { root.clicado(); }
+    }
+}
+
+// ---------------------------------------------------------------- organizar
+
+export component TelaOrganizar inherits Rectangle {
+    in property <[AppOrdem]> apps;
+
+    callback alternar(int);
+    callback mover(int, int);
+    callback voltar();
+
+    // fontes embutidas: só caracteres de textos literais entram na fonte; estes podem
+    // chegar em textos dinâmicos (nomes e ícones dos apps vêm do Rust, ver APPS em src/app.rs)
+    out property <string> caracteres-embutidos:
+        "áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ"
+        + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        + "◷★✉♫≋✱⚙";
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: "Organizar início";
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    Text {
+        x: 32px;
+        y: 104px;
+        width: 1216px;
+        height: 40px;
+        text: "Toque no olho para mostrar ou ocultar; use as setas para mudar a ordem.";
+        font-size: Tema.texto-corpo;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Flickable {
+        x: 0px;
+        y: 150px;
+        width: 1280px;
+        height: 570px;
+        content-height: root.apps.length * 96px;
+
+        for app[i] in root.apps: Rectangle {
+            x: 0px;
+            y: i * 96px;
+            width: 1280px;
+            height: 96px;
+            background: #00000000;
+
+            // ícone do app: caractere branco num círculo na cor dele (como no lançador)
+            Rectangle {
+                x: 32px;
+                y: 16px;
+                width: 64px;
+                height: 64px;
+                border-radius: 32px;
+                background: app.cor;
+
+                Text {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    text: app.icone;
+                    font-size: 34px;
+                    color: Colors.white;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                x: 116px;
+                y: 24px;
+                width: 880px;
+                height: 48px;
+                text: app.nome;
+                font-size: Tema.texto-titulo;
+                color: app.visivel ? Tema.texto : Tema.texto-sec;
+                opacity: app.visivel ? 1.0 : 0.6;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+
+            // olho: mostrar ou ocultar no lançador
+            BotaoIcone {
+                x: 1016px;
+                y: 12px;
+                icone: app.visivel ? @image-url("icones/visibility.svg") : @image-url("icones/visibility_off.svg");
+                cor: Tema.texto-sec;
+                clicado => { root.alternar(i); }
+            }
+
+            // seta para cima: sobe uma posição (apagada na primeira linha)
+            BotaoIcone {
+                x: 1096px;
+                y: 12px;
+                icone: @image-url("icones/arrow_upward.svg");
+                cor: Tema.texto;
+                ativo: i > 0;
+                clicado => { root.mover(i, -1); }
+            }
+
+            // seta para baixo: desce uma posição (apagada na última linha)
+            BotaoIcone {
+                x: 1176px;
+                y: 12px;
+                icone: @image-url("icones/arrow_downward.svg");
+                cor: Tema.texto;
+                ativo: i < root.apps.length - 1;
+                clicado => { root.mover(i, 1); }
+            }
+
+            // divisor fino entre as linhas
+            Rectangle {
+                x: 116px;
+                y: 95px;
+                width: 1164px;
+                height: 1px;
+                background: Tema.contorno;
+                visible: i < root.apps.length - 1;
+            }
+        }
+    }
+}
+
+// ------------------------------------------------- botão de editar (lançador)
+
+// Lápis de 72x72 para o lançador abrir "Organizar início".
+export component BotaoEditarInicio inherits Rectangle {
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+
+    BotaoIcone {
+        x: 0px;
+        y: 0px;
+        icone: @image-url("icones/edit.svg");
+        cor: Tema.texto-sec;
+        clicado => { root.clicado(); }
+    }
+}

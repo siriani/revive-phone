@@ -5,10 +5,13 @@
 //! pelo evdev. Os serviços (revive-bt, revive-mpv) continuam como antes.
 
 mod app;
+mod clima;
 mod cripto;
 mod dados;
+mod inicio;
 mod manifesto;
 mod musica;
+mod sistema;
 mod tela;
 mod telegram;
 

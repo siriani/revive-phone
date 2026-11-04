@@ -3,9 +3,28 @@ import "fontes/DejaVuSansBold-Familia.ttf";
 import { Tema } from "tema.slint";
 export { Tema }
 export { FilaItem } from "musica_ui.slint";
+export { HoraClima, MoedaMini } from "painel_ui.slint";
+export { AppOrdem } from "inicio_ui.slint";
+
+// ícones do clima por nome (o Rust escolhe o nome; as imagens vêm embutidas)
+export global IconesClima {
+    public pure function img(n: string) -> image {
+        if n == "sunny" { return @image-url("icones/sunny.svg"); }
+        if n == "clear_night" { return @image-url("icones/clear_night.svg"); }
+        if n == "partly_cloudy_day" { return @image-url("icones/partly_cloudy_day.svg"); }
+        if n == "partly_cloudy_night" { return @image-url("icones/partly_cloudy_night.svg"); }
+        if n == "foggy" { return @image-url("icones/foggy.svg"); }
+        if n == "rainy" { return @image-url("icones/rainy.svg"); }
+        if n == "weather_snowy" { return @image-url("icones/weather_snowy.svg"); }
+        if n == "thunderstorm" { return @image-url("icones/thunderstorm.svg"); }
+        return @image-url("icones/cloud.svg");
+    }
+}
 import { Esquemas } from "esquemas.slint";
 import { MenuInner } from "../material/ui/components/menu.slint";
 import { TelaTocandoMat, TelaFila, RailMusica, FilaItem } from "musica_ui.slint";
+import { PainelMat, HoraClima, MoedaMini } from "painel_ui.slint";
+import { TelaOrganizar, BotaoEditarInicio, AppOrdem } from "inicio_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
          MaterialTypography, MaterialPalette, MenuItem } from "@material";
@@ -118,13 +137,14 @@ component Lancador inherits Rectangle {
     in property <string> tocando;
     in property <[AppInfo]> apps;
     callback abrir(string);
+    BotaoEditarInicio { x: 1190px; y: 14px; clicado => { root.abrir("organizar"); } }
     // barra de status
     Text { x: 30px; y: 12px; text: root.hora; font-size: 64px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
     Text { x: 255px; y: 40px; text: root.data; font-size: 26px; color: Cores.apagado; }
-    Text { x: 640px; y: 22px; width: 610px; horizontal-alignment: right; font-size: 26px;
+    Text { x: 560px; y: 22px; width: 610px; horizontal-alignment: right; font-size: 26px;
            text: root.wifi-ok ? "Wi-Fi: " + root.wifi-ssid : "Wi-Fi desconectado";
            color: root.wifi-ok ? Cores.bom : Cores.ruim; }
-    Text { x: 640px; y: 58px; width: 610px; horizontal-alignment: right; font-size: 26px;
+    Text { x: 560px; y: 58px; width: 610px; horizontal-alignment: right; font-size: 26px;
            text: root.bt-conectados; color: Cores.apagado; }
     // grade de apps: 4 por linha
     for a[i] in root.apps: Rectangle {
@@ -763,6 +783,7 @@ component TelaAjustes inherits Rectangle {
     callback voltar();
     callback tema(bool);
     callback paleta(int);
+    callback organizar();
     property <bool> menu-aberto;
     background: Tema.fundo;
     BarraApp { titulo: "Ajustes"; voltar => { root.voltar(); } }
@@ -790,8 +811,12 @@ component TelaAjustes inherits Rectangle {
         icone: @image-url("icones/light_mode.svg"); ativo: !Tema.escuro;
         escolher => { root.tema(false); }
     }
-    Text { x: 48px; y: 480px; width: 1184px; font-size: Tema.texto-corpo; color: Tema.texto-sec; wrap: word-wrap;
-           text: "Todos os apps usam a mesma central de design (cores, textos e formas do Material 3). A escolha vale para o sistema inteiro e fica salva."; }
+    CartaoOpcao {
+        x: 48px; y: 465px; width: 580px; height: 235px;
+        titulo: "Tela inicial"; sub: "Escolha quais apps aparecem e em que ordem.";
+        icone: @image-url("icones/edit.svg"); ativo: false;
+        escolher => { root.organizar(); }
+    }
     // menu de esquemas de cor (MenuInner da biblioteca, sem janela popup)
     if root.menu-aberto: TouchArea { clicked => { root.menu-aberto = false; } }
     if root.menu-aberto: MenuInner {
@@ -1062,6 +1087,26 @@ export component AppWindow inherits Window {
     in property <string> toc-repetir: "nao";
     in property <[FilaItem]> fila-itens;
     callback volume-mudar(float);
+    // painel (vitrine)
+    in property <string> pn-cidade;
+    in property <string> pn-temp;
+    in property <string> pn-desc;
+    in property <string> pn-maxmin;
+    in property <string> pn-icone;
+    in property <string> pn-erro: "carregando o clima...";
+    in property <[HoraClima]> pn-proximas;
+    in property <bool> pn-tomada;
+    in property <bool> pn-carregando;
+    in property <string> pn-temp-cpu;
+    in property <[MoedaMini]> pn-moedas;
+    in property <int> pn-tg;
+    in property <bool> pn-noite;
+    in property <int> bt-qtd;
+    callback acordar();
+    // organizar início
+    in property <[AppOrdem]> org-apps;
+    callback org-alternar(int);
+    callback org-mover(int, int);
     callback fila-tocar(int);
     callback fila-remover(int);
 
@@ -1107,6 +1152,13 @@ export component AppWindow inherits Window {
             voltar => { root.ir("inicio"); }
             tema(e) => { root.ajustes-tema(e); }
             paleta(i) => { root.ajustes-paleta(i); }
+            organizar => { root.ir("organizar"); }
+        }
+        if root.tela == "organizar": TelaOrganizar {
+            width: 1280px; height: 720px; apps: root.org-apps;
+            alternar(i) => { root.org-alternar(i); }
+            mover(i, d) => { root.org-mover(i, d); }
+            voltar => { root.ir("inicio"); }
         }
         if root.tela == "tg-conversas": TelaTgConversas {
             width: 1280px; height: 720px; conversas: root.tg-conversas; mensagem: root.tg-mensagem;
@@ -1145,15 +1197,19 @@ export component AppWindow inherits Window {
             subiu: root.grafico-subiu;
             voltar => { root.ir("cripto"); }
         }
-        if root.tela == "painel": Painel {
+        if root.tela == "painel": PainelMat {
             width: 1280px; height: 720px;
-            hora: root.hora; data: root.data;
-            btc-brl: root.btc-brl; btc-usd: root.btc-usd; btc-variacao: root.btc-variacao;
-            btc-subiu: root.btc-subiu; btc-info: root.btc-info;
-            wifi-ssid: root.wifi-ssid; wifi-ip: root.wifi-ip; wifi-ok: root.wifi-ok;
-            tocando: root.tocando; bt-conectados: root.bt-conectados;
-            ir(t) => { root.ir(t); }
-            atualizar-btc => { root.atualizar-btc(); }
+            hora: root.hora; data: root.data; cidade: root.pn-cidade;
+            clima-temp: root.pn-temp; clima-desc: root.pn-desc; clima-maxmin: root.pn-maxmin;
+            clima-icone: IconesClima.img(root.pn-icone); clima-erro: root.pn-erro; proximas: root.pn-proximas;
+            wifi-ok: root.wifi-ok; wifi-ssid: root.wifi-ssid; bt-qtd: root.bt-qtd;
+            na-tomada: root.pn-tomada; carregando: root.pn-carregando; temp-cpu: root.pn-temp-cpu;
+            tocando-titulo: root.toc-titulo; tocando-artista: root.toc-artista; tocando-capa: root.toc-capa;
+            tocando-ativo: root.toc-ativo; tocando-pausado: root.toc-pausa; tocando-progresso: root.toc-progresso;
+            moedas: root.pn-moedas; tg-nao-lidas: root.pn-tg; noite: root.pn-noite;
+            ir(t) => { if t == "acordar" { root.acordar(); } else { root.ir(t); } }
+            tocar-pausar => { root.controle("pausar"); }
+            proxima => { root.controle("proxima"); }
         }
         if root.tela == "wifi": TelaWifi {
             width: 1280px; height: 720px; redes: root.redes;

@@ -10,10 +10,11 @@ use std::time::Duration;
 use serde_json::Value;
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
+use crate::{clima, inicio, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppWindow, Aparelho, Bolha, Faixa, FilaItem, Item, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppOrdem, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -1216,6 +1217,7 @@ fn aplicar_player(ui: &AppWindow, st: Option<musica::Estado>) {
 
 fn aplicar_bt(ui: &AppWindow, st: Value) {
     let conectados = dados::bt_conectados(&st);
+    ui.set_bt_qtd(conectados.len() as i32);
     ui.set_bt_conectados(ss(if conectados.is_empty() {
         String::new()
     } else {
@@ -1292,15 +1294,15 @@ fn salvar_tema(ui: &AppWindow) {
     let _ = std::fs::write(TEMA_FILE, format!("{} {}", if t.get_escuro() { "escuro" } else { "claro" }, t.get_paleta()));
 }
 
-pub fn ligar(ui: &AppWindow) {
-    let salvo = std::fs::read_to_string(TEMA_FILE).unwrap_or_default();
-    let mut partes = salvo.split_whitespace();
-    let escuro = partes.next() != Some("claro");
-    ui.global::<Tema>().set_paleta(partes.next().and_then(|p| p.parse().ok()).unwrap_or(0));
-    aplicar_tema(ui, escuro);
-    ui.set_musica_configurada(api().configurado());
-    let apps: Vec<AppInfo> = APPS
-        .iter()
+thread_local! {
+    static ORDEM: RefCell<Vec<(String, bool)>> = RefCell::default();
+    static TODOS_APPS: RefCell<Vec<AppInfo>> = RefCell::default();
+    static ACORDADO: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// Apps nativos e de manifesto, na ordem padrão.
+fn todos_apps() -> Vec<AppInfo> {
+    APPS.iter()
         .map(|(id, nome, icone, (r, g, b))| AppInfo {
             id: ss(*id),
             nome: ss(*nome),
@@ -1313,8 +1315,142 @@ pub fn ligar(ui: &AppWindow) {
             icone: ss(m.icone.clone()),
             cor: Color::from_rgb_u8(m.cor.0, m.cor.1, m.cor.2),
         }))
-        .collect();
-    ui.set_apps(ModelRc::new(VecModel::from(apps)));
+        .collect()
+}
+
+/// Lançador (só os visíveis, na ordem escolhida) e a tela "Organizar início".
+fn aplicar_ordem(ui: &AppWindow) {
+    let (visiveis, org) = TODOS_APPS.with_borrow(|todos| {
+        ORDEM.with_borrow(|ordem| {
+            let achar = |id: &str| todos.iter().find(|a| a.id == id).cloned();
+            let visiveis: Vec<AppInfo> = ordem.iter().filter(|(_, v)| *v).filter_map(|(id, _)| achar(id)).collect();
+            let org: Vec<AppOrdem> = ordem
+                .iter()
+                .filter_map(|(id, v)| {
+                    achar(id).map(|a| AppOrdem { id: a.id, nome: a.nome, icone: a.icone, cor: a.cor, visivel: *v })
+                })
+                .collect();
+            (visiveis, org)
+        })
+    });
+    ui.set_apps(ModelRc::new(VecModel::from(visiveis)));
+    ui.set_org_apps(ModelRc::new(VecModel::from(org)));
+}
+
+/// Preço curto para o cartão do Painel: "98,4 mil", "3.120", "0,52".
+fn compacto(p: f64) -> String {
+    if p >= 10_000.0 {
+        format!("{:.1} mil", p / 1000.0).replace('.', ",")
+    } else if p >= 100.0 {
+        dados::milhar(p)
+    } else {
+        format!("{p:.2}").replace('.', ",")
+    }
+}
+
+/// Painel (vitrine): clima e sistema a cada minuto, cripto a cada 5 min, modo noite.
+fn ligar_painel(ui: &AppWindow) {
+    let f = ui.as_weak();
+    ui.on_acordar(move || {
+        ACORDADO.set(chrono::Local::now().timestamp());
+        f.upgrade().iter().for_each(|ui| ui.set_pn_noite(false));
+    });
+    let fraca = ui.as_weak();
+    let n = std::cell::Cell::new(0u32);
+    let atualizar = move || {
+        let vez = n.get();
+        n.set(vez + 1);
+        let Some(ui) = fraca.upgrade() else { return };
+        // noite: 23h às 6h, exceto 2 min depois de um toque
+        let agora = chrono::Local::now();
+        let h = agora.format("%H").to_string().parse::<u32>().unwrap_or(12);
+        ui.set_pn_noite((h >= 23 || h < 6) && agora.timestamp() - ACORDADO.get() > 120);
+        if ui.get_tela() != "painel" && vez > 0 {
+            return;
+        }
+        let cripto_agora = vez % 5 == 0;
+        let fraca = ui.as_weak();
+        std::thread::spawn(move || {
+            let sis = sistema::sistema();
+            let cl = clima::clima();
+            let moedas = if cripto_agora { cripto::mercado(&cripto::moeda()).ok() } else { None };
+            let _ = fraca.upgrade_in_event_loop(move |ui| {
+                ui.set_pn_tomada(sis.na_tomada);
+                ui.set_pn_carregando(sis.carregando);
+                ui.set_pn_temp_cpu(ss(sis.temp_cpu.map(|t| format!("{t}°")).unwrap_or_default()));
+                match cl {
+                    Ok(c) => {
+                        ui.set_pn_erro(ss(""));
+                        ui.set_pn_cidade(ss(c.cidade));
+                        ui.set_pn_temp(ss(format!("{}°", c.temp)));
+                        ui.set_pn_desc(ss(c.descricao));
+                        ui.set_pn_maxmin(ss(format!("{}° / {}°", c.max, c.min)));
+                        ui.set_pn_icone(ss(c.icone));
+                        let g = ui.global::<IconesClima>();
+                        let horas: Vec<HoraClima> = c
+                            .proximas
+                            .iter()
+                            .map(|x| HoraClima {
+                                hora: ss(x.hora.clone()),
+                                temp: ss(format!("{}°", x.temp)),
+                                icone: g.invoke_img(ss(x.icone)),
+                            })
+                            .collect();
+                        ui.set_pn_proximas(ModelRc::new(VecModel::from(horas)));
+                    }
+                    Err(e) => ui.set_pn_erro(ss(e)),
+                }
+                if let Some(m) = moedas {
+                    let v: Vec<MoedaMini> = m
+                        .iter()
+                        .take(3)
+                        .map(|x| MoedaMini {
+                            simbolo: ss(x.simbolo.to_uppercase()),
+                            preco: ss(compacto(x.preco)),
+                            variacao: ss(format!("{:+.1}%", x.variacao).replace('.', ",")),
+                            subiu: x.variacao >= 0.0,
+                        })
+                        .collect();
+                    ui.set_pn_moedas(ModelRc::new(VecModel::from(v)));
+                }
+            });
+        });
+    };
+    atualizar();
+    let t = slint::Timer::default();
+    t.start(slint::TimerMode::Repeated, Duration::from_secs(60), atualizar);
+    std::mem::forget(t);
+}
+
+pub fn ligar(ui: &AppWindow) {
+    let salvo = std::fs::read_to_string(TEMA_FILE).unwrap_or_default();
+    let mut partes = salvo.split_whitespace();
+    let escuro = partes.next() != Some("claro");
+    ui.global::<Tema>().set_paleta(partes.next().and_then(|p| p.parse().ok()).unwrap_or(0));
+    aplicar_tema(ui, escuro);
+    ui.set_musica_configurada(api().configurado());
+    let todos = todos_apps();
+    let ids: Vec<String> = todos.iter().map(|a| a.id.to_string()).collect();
+    ORDEM.with_borrow_mut(|o| *o = inicio::carregar(&ids));
+    TODOS_APPS.with_borrow_mut(|t| *t = todos);
+    aplicar_ordem(ui);
+    let f = ui.as_weak();
+    ui.on_org_alternar(move |i| {
+        ORDEM.with_borrow_mut(|o| {
+            inicio::alternar(o, i.max(0) as usize);
+            inicio::salvar(o);
+        });
+        f.upgrade().iter().for_each(aplicar_ordem);
+    });
+    let f = ui.as_weak();
+    ui.on_org_mover(move |i, d| {
+        ORDEM.with_borrow_mut(|o| {
+            inicio::mover(o, i.max(0) as usize, d);
+            inicio::salvar(o);
+        });
+        f.upgrade().iter().for_each(aplicar_ordem);
+    });
+    ligar_painel(ui);
     let f = ui.as_weak();
     ui.on_cripto_abrir(move |id, nome| {
         if let Some(ui) = f.upgrade() {
