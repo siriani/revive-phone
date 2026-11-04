@@ -91,10 +91,13 @@ export component TelaCamera inherits Rectangle {
     in property <string> mensagem;
     in property <image> ultima;
     in property <bool> tem-ultima;
+    // o aparelho tem as duas câmeras (mostra o botão de alternar frontal/traseira)
+    in property <bool> tem-traseira;
 
     callback voltar();
     callback disparar();
     callback galeria();
+    callback trocar();
 
     width: 1280px;
     height: 720px;
@@ -159,6 +162,17 @@ export component TelaCamera inherits Rectangle {
         wrap: no-wrap;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+
+    // alternar frontal/traseira (acima do disparo); funciona também com a câmera em erro
+    BotaoIcone {
+        x: 1084px;
+        y: 160px;
+        icone: @image-url("icones/cameraswitch.svg");
+        cor: Tema.texto;
+        ativo: !root.ocupado;
+        visible: root.tem-traseira;
+        clicado => { root.trocar(); }
     }
 
     // disparo: anel de 120px com o círculo branco de 96px

@@ -1,0 +1,58 @@
+From c841bd471f4ed52b1e331002f076938d30e57499 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 14:39:22 -0300
+Subject: [PATCH 3/4] media: qcom: camss: always stop the pipeline in
+ stop_streaming
+
+video_stop_streaming() walks the pipeline upstream and calls
+.s_stream(0) on every subdev. It gives up on the first non-zero return,
+without stopping the media pipeline and without returning the queued
+buffers to vb2.
+
+A subdev without .s_stream() returns -ENOIOCTLCMD. video_start_streaming()
+already ignores that, but video_stop_streaming() does not, so with such a
+subdev in the pipeline, e.g. the pixel array entity of the MT9M114 sensor
+driver, every stream off:
+
+- triggers the vb2 WARN about buffers still owned by the driver,
+- leaves the pipeline started, so the next VIDIOC_STREAMON and
+  "media-ctl -r" fail with -EBUSY.
+
+Treat -ENOIOCTLCMD as success, as at stream on, and only log real
+errors, then always stop the pipeline and flush the buffers: a
+.stop_streaming() callback cannot fail and must give back all buffers.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ drivers/media/platform/qcom/camss/camss-video.c | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-video.c b/drivers/media/platform/qcom/camss/camss-video.c
+index c4c7928f4..f3419c270 100644
+--- a/drivers/media/platform/qcom/camss/camss-video.c
++++ b/drivers/media/platform/qcom/camss/camss-video.c
+@@ -337,12 +337,16 @@ static void video_stop_streaming(struct vb2_queue *q)
+ 		entity = pad->entity;
+ 		subdev = media_entity_to_v4l2_subdev(entity);
+ 
++		/*
++		 * Subdevs without .s_stream(), such as a sensor pixel array
++		 * entity, return -ENOIOCTLCMD, as at stream on. On a real error
++		 * keep going: the pipeline must be stopped and the buffers
++		 * returned to vb2 in any case.
++		 */
+ 		ret = v4l2_subdev_call(subdev, video, s_stream, 0);
+-
+-		if (ret) {
+-			dev_err(video->camss->dev, "Video pipeline stop failed: %d\n", ret);
+-			return;
+-		}
++		if (ret && ret != -ENOIOCTLCMD)
++			dev_err(video->camss->dev,
++				"Failed to stop %s: %d\n", entity->name, ret);
+ 	}
+ 
+ 	video_device_pipeline_stop(vdev);
+-- 
+2.43.0
+

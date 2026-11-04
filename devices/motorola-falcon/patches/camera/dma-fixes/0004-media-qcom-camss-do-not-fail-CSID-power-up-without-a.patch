@@ -1,0 +1,60 @@
+From ff44c38172e9527dcd7cd644b6fdafd0ba7a1589 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 14:56:09 -0300
+Subject: [PATCH 4/4] media: qcom: camss: do not fail CSID power up without a
+ matching VFE
+
+csid_set_power() powers up the VFE with the same index as the CSID
+before the CSID itself, through parent_dev_ops->get(). The VFE
+implementation, vfe_parent_dev_ops_get(), returns -EINVAL when there is
+no VFE with that index.
+
+On the ISPIF based SoCs there are more CSIDs than VFEs: MSM8916 (and
+MSM8226) have two CSIDs and a single VFE, and the ISPIF routes either
+CSID to it. Streaming from CSID1 then fails right away with
+
+  qcom-camss ...: Failed to power up pipeline: -22
+
+although the pipeline CSID1 -> ISPIF -> VFE0 is valid.
+
+Return 0 when there is no VFE of the same index: there is nothing to
+power up for that CSID, the VFE in the pipeline is powered by its own
+subdev. vfe_parent_dev_ops_put() already ignores such indexes.
+
+Signed-off-by: Allan Siriani <allan@fatecpompeia.edu.br>
+---
+ drivers/media/platform/qcom/camss/camss.c | 17 +++++++++--------
+ 1 file changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index e8aa7b9b0..530831ac3 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -2942,15 +2942,16 @@ void camss_pm_domain_off(struct camss *camss, int id)
+ 
+ static int vfe_parent_dev_ops_get(struct camss *camss, int id)
+ {
+-	int ret = -EINVAL;
+-
+-	if (id < camss->res->vfe_num) {
+-		struct vfe_device *vfe = &camss->vfe[id];
+-
+-		ret = vfe_get(vfe);
+-	}
++	/*
++	 * On the ISPIF based SoCs any CSID can feed any VFE, and there may be
++	 * more CSIDs than VFEs (MSM8916: two CSIDs, one VFE). A CSID without a
++	 * VFE of the same index has no parent to power up: the VFE that ends
++	 * up in the pipeline is powered by its own subdev.
++	 */
++	if (id >= camss->res->vfe_num)
++		return 0;
+ 
+-	return ret;
++	return vfe_get(&camss->vfe[id]);
+ }
+ 
+ static int vfe_parent_dev_ops_put(struct camss *camss, int id)
+-- 
+2.43.0
+

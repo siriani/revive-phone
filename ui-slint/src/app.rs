@@ -1643,6 +1643,7 @@ fn abrir_camera(ui: &AppWindow) {
     ui.set_cam_ativa(false);
     ui.set_cam_ocupado(false);
     ui.set_cam_preview(Image::default());
+    ui.set_cam_tem_traseira(camera::tem_traseira());
     ui.set_cam_mensagem(ss(i18n::t("abrindo a câmera...")));
     let fraca = ui.as_weak();
     let cap = camera::iniciar(move || {
@@ -2068,6 +2069,15 @@ pub fn ligar(ui: &AppWindow) {
         }
     });
     let f = ui.as_weak();
+    let f2 = f.clone();
+    ui.on_cam_trocar(move || {
+        let Some(ui) = f2.upgrade() else { return };
+        if ui.get_cam_ocupado() {
+            return;
+        }
+        camera::trocar_lado();
+        abrir_camera(&ui);
+    });
     ui.on_cam_disparar(move || {
         let Some(ui) = f.upgrade() else { return };
         if !ui.get_cam_ativa() || ui.get_cam_ocupado() {

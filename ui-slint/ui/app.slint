@@ -1200,7 +1200,9 @@ export component AppWindow inherits Window {
     in property <string> cam-mensagem;
     in property <image> cam-ultima;
     in property <bool> cam-tem-ultima;
+    in property <bool> cam-tem-traseira;
     callback cam-disparar();
+    callback cam-trocar();
     in property <[FotoUi]> gal-fotos;
     in property <string> gal-mensagem;
     in property <int> gal-aberta: -1;
@@ -1298,8 +1300,10 @@ export component AppWindow inherits Window {
             width: 1280px; height: 720px; previa: root.cam-preview; ativa: root.cam-ativa;
             ocupado: root.cam-ocupado; mensagem: root.cam-mensagem;
             ultima: root.cam-ultima; tem-ultima: root.cam-tem-ultima;
+            tem-traseira: root.cam-tem-traseira;
             voltar => { root.ir("inicio"); }
             disparar => { root.cam-disparar(); }
+            trocar => { root.cam-trocar(); }
             galeria => { root.ir("camera-galeria"); }
         }
         if root.tela == "camera-galeria": TelaGaleria {

@@ -1,9 +1,13 @@
-//! App Câmera: captura da câmera traseira (MT9M114 no CAMSS do MSM8226) por V4L2,
+//! App Câmera: captura da câmera frontal (MT9M114) e da traseira (AR0543) no CAMSS do
+//! MSM8226 por V4L2,
 //! em Rust puro (ioctl pela libc, sem crate nova).
 //!
 //! Caminho da imagem (montado com o `media-ctl`, os mesmos argumentos validados no aparelho):
 //! sensor "mt9m114 ifp 3-0048" -> msm_csiphy1 -> msm_csid0 -> msm_ispif0 -> msm_vfe0_rdi0.
-//! O RDI grava o que o sensor manda (UYVY8_1X16), sem ISP. O nó de vídeo do RDI é
+//! A traseira ("ar0543 3-0036", RAW10 Bayer GRBG, sem ISP no caminho RDI) vai por
+//! msm_csiphy0 -> msm_csid0 -> ... (o mesmo CSID; as duas nunca filmam juntas); o app faz a
+//! interpolação Bayer, o balanço de branco (mundo cinza) e a exposição automática.
+//! O RDI grava o que o sensor manda (UYVY8_1X16 ou RAW10), sem ISP. O nó de vídeo do RDI é
 //! multiplanar (V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 1 plano); o caso de 1 plano só
 //! (VIDEO_CAPTURE) também é tratado, decidido pelo VIDIOC_QUERYCAP.
 //!
@@ -52,7 +56,7 @@ use std::io::{BufWriter, Write};
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -64,6 +68,8 @@ use crate::i18n;
 /// Quadro RGB pronto para a interface (Image::from_rgb8).
 pub type Quadro = SharedPixelBuffer<Rgb8Pixel>;
 
+/// existe quando o qcom_camss carregado usa o videobuf2-dma-contig (correção do kernel)
+const CAMSS_CONTIGUO: &str = "/sys/module/videobuf2_dma_contig/holders/qcom_camss";
 const CONF: &str = "/var/lib/revive/camera.conf";
 /// Tamanho máximo das miniaturas da galeria (4:3).
 pub const MINI_L: u32 = 240;
@@ -112,6 +118,9 @@ impl Ordem {
     }
 }
 
+/// RAW10 Bayer GRBG empacotado do MIPI (V4L2_PIX_FMT_SGRBG10P)
+const PGAA: u32 = fourcc(b"pgAA");
+
 const fn fourcc(c: &[u8; 4]) -> u32 {
     (c[0] as u32) | ((c[1] as u32) << 8) | ((c[2] as u32) << 16) | ((c[3] as u32) << 24)
 }
@@ -120,8 +129,38 @@ fn fourcc_texto(f: u32) -> String {
     f.to_le_bytes().iter().map(|&b| if b.is_ascii_graphic() { b as char } else { '?' }).collect()
 }
 
+/// Qual câmera: a escolha fica em /var/lib/revive/camera-lado.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Lado {
+    Frente,
+    Tras,
+}
+
+const LADO: &str = "/var/lib/revive/camera-lado";
+/// nó do sensor traseiro no device tree (só existe no DTB com as duas câmeras)
+const DT_TRASEIRA: &str = "/sys/firmware/devicetree/base/soc/cci@fda0c000/i2c-bus@0/camera-sensor@36";
+
+pub fn tem_traseira() -> bool {
+    Path::new(DT_TRASEIRA).exists()
+}
+
+pub fn lado() -> Lado {
+    let tras = fs::read_to_string(LADO).map(|t| t.trim() == "tras").unwrap_or(false);
+    if tras && tem_traseira() { Lado::Tras } else { Lado::Frente }
+}
+
+/// Alterna frontal/traseira e grava a escolha.
+pub fn trocar_lado() -> Lado {
+    let novo = if lado() == Lado::Frente && tem_traseira() { Lado::Tras } else { Lado::Frente };
+    let _ = fs::create_dir_all("/var/lib/revive");
+    let _ = fs::write(LADO, if novo == Lado::Tras { "tras\n" } else { "frente\n" });
+    novo
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub lado: Lado,
+    pub sensor_tras: String,
     pub pasta: PathBuf,
     /// None = a ordem do pixelformat que o driver devolver no G_FMT
     pub ordem: Option<Ordem>,
@@ -139,6 +178,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            lado: Lado::Frente,
+            sensor_tras: "ar0543 3-0036".into(),
             pasta: PathBuf::from("/home/allan/Fotos"),
             ordem: None,
             faixa_cheia: false,
@@ -175,6 +216,7 @@ pub fn config() -> Config {
             "largura" => c.largura = v.parse::<u32>().unwrap_or(c.largura).clamp(320, 1280),
             "altura" => c.altura = v.parse::<u32>().unwrap_or(c.altura).clamp(240, 960),
             "sensor" if !v.is_empty() => c.sensor = v.to_string(),
+            "sensor_tras" if !v.is_empty() => c.sensor_tras = v.to_string(),
             "media" if !v.is_empty() => c.media = v.to_string(),
             "video" if !v.is_empty() => c.video = Some(v.to_string()),
             "fps" => c.fps = v.parse::<u32>().unwrap_or(c.fps).clamp(1, 30),
@@ -183,7 +225,23 @@ pub fn config() -> Config {
     }
     c.largura &= !7; // macropixel = 2 pontos; múltiplo de 8 para o scaler do ifp
     c.altura &= !1;
+    c.lado = lado();
+    if c.lado == Lado::Tras {
+        // a traseira só tem o modo 1280x960 (binning 2x2) e não passa por giro/espelho
+        (c.largura, c.altura) = (1280, 960);
+        c.girar180 = false;
+        c.espelhar = false;
+    }
     c
+}
+
+impl Config {
+    fn tras(&self) -> bool {
+        self.lado == Lado::Tras
+    }
+    fn sensor_ativo(&self) -> &str {
+        if self.tras() { &self.sensor_tras } else { &self.sensor }
+    }
 }
 
 // ------------------------------------------------------------------ V4L2 (videodev2.h)
@@ -384,6 +442,11 @@ fn tamanho_buffer(quadro: usize) -> usize {
 /// Todas as páginas do mapa estão em endereços físicos consecutivos? (o driver só passa ao
 /// hardware o endereço da primeira). Precisa de root: sem PFN visível, nega.
 fn contiguo(pagemap: RawFd, p: *mut u8, len: usize) -> Result<bool, String> {
+    // camss corrigido (usa videobuf2-dma-contig sem IOMMU): o buffer é contíguo por
+    // construção e o mapa dele (VM_PFNMAP) nem aparece no pagemap; a guarda continua valendo
+    if Path::new(CAMSS_CONTIGUO).exists() {
+        return Ok(true);
+    }
     let n = len.div_ceil(PAGINA);
     let mut primeiro = 0u64;
     for i in 0..n {
@@ -458,7 +521,6 @@ impl Dispositivo {
             quadro: 0,
             fourcc: 0,
         };
-        let _ = c;
 
         // multiplanar ou não
         let mut cap: Capability = unsafe { std::mem::zeroed() };
@@ -475,7 +537,7 @@ impl Dispositivo {
 
         // formato: UYVY (o código UYVY8_1X16 do pipeline; o STREAMON confere os dois)
         let mut f = Formato::novo(d.tipo);
-        let pix = Ordem::Uyvy.fourcc();
+        let pix = if c.tras() { PGAA } else { Ordem::Uyvy.fourcc() };
         if d.mplane {
             f.escrever(MP_LARGURA, largura);
             f.escrever(MP_ALTURA, altura);
@@ -501,7 +563,9 @@ impl Dispositivo {
         d.altura = h as usize;
         d.fourcc = fcc;
         // no modo RDI o hardware grava as linhas sem preenchimento: o stride real é largura*2
-        d.bpl = if bpl as usize >= d.largura * 2 { bpl as usize } else { d.largura * 2 };
+        // (RAW10 empacotado: 5 bytes a cada 4 pontos)
+        let min_bpl = if c.tras() { d.largura * 5 / 4 } else { d.largura * 2 };
+        d.bpl = if bpl as usize >= min_bpl { bpl as usize } else { min_bpl };
         d.quadro = (tam as usize).max(d.bpl * d.altura);
         eprintln!(
             "câmera: {caminho} {} {w}x{h} {} bytesperline {bpl} sizeimage {tam}",
@@ -725,6 +789,9 @@ fn desligar_modulos(c: &Config) {
         let _ = media_ctl(c, &["-r"]);
     }
     let ok = modprobe(&["-r", "qcom_camss", "mt9m114"]);
+    if tem_traseira() {
+        modprobe(&["-r", "ar0543"]);
+    }
     eprintln!("câmera: módulos descarregados: {ok}");
 }
 
@@ -734,11 +801,16 @@ fn carregar_modulos(c: &Config) -> Result<(), String> {
     if Path::new(&c.media).exists() {
         desligar_modulos(c);
     }
-    modprobe(&["-a", "i2c_qcom_cci", "mt9m114", "qcom_camss"]);
+    modprobe(&["-a", "i2c_qcom_cci", "mt9m114"]);
+    // com as duas câmeras no device tree, o camss só fecha o grafo com os dois sensores
+    if tem_traseira() {
+        modprobe(&["ar0543"]);
+    }
+    modprobe(&["qcom_camss"]);
     for _ in 0..50 {
         if Path::new(&c.media).exists() {
             if let Ok(t) = media_ctl(c, &["-p"]) {
-                if t.contains(&c.sensor) && t.contains("msm_vfe0_video0") {
+                if t.contains(c.sensor_ativo()) && t.contains("msm_vfe0_video0") {
                     return Ok(());
                 }
             }
@@ -751,6 +823,41 @@ fn carregar_modulos(c: &Config) -> Result<(), String> {
 /// Monta o pipeline para `largura`x`altura` (crop 1280x960 do ifp + compose, o scaler do
 /// sensor reduz) e devolve o nó de captura.
 fn preparar(c: &Config, largura: u32, altura: u32) -> Result<String, String> {
+    if c.tras() {
+        preparar_tras(c, largura, altura)?;
+    } else {
+        preparar_frente(c, largura, altura)?;
+    }
+    Ok(match &c.video {
+        Some(v) => v.clone(),
+        None => media_ctl(c, &["-e", "msm_vfe0_video0"])
+            .ok()
+            .filter(|s| s.starts_with("/dev/"))
+            .unwrap_or_else(|| "/dev/video0".into()),
+    })
+}
+
+/// Traseira: AR0543 -> csiphy0 -> csid0 -> ispif0 -> rdi0, RAW10 do jeito que sai do sensor.
+fn preparar_tras(c: &Config, largura: u32, altura: u32) -> Result<(), String> {
+    let links = "\"msm_csiphy0\":1->\"msm_csid0\":0[1],\
+                 \"msm_csid0\":1->\"msm_ispif0\":0[1],\
+                 \"msm_ispif0\":1->\"msm_vfe0_rdi0\":0[1]";
+    media_ctl(c, &["-l", links])?;
+    let m = format!("SGRBG10_1X10/{largura}x{altura}");
+    let f = format!("[fmt:{m}]");
+    let formatos = format!(
+        "\"{}\":0[fmt:{m} field:none],\"msm_csiphy0\":0{f},\"msm_csid0\":0{f},\"msm_ispif0\":0{f},\"msm_vfe0_rdi0\":0{f}",
+        c.sensor_tras
+    );
+    media_ctl(c, &["-V", &formatos])?;
+    let topo = media_ctl(c, &["-p", "-e", &c.sensor_tras])?;
+    if !topo.contains(&m) {
+        return Err(format!("o sensor não ficou em {largura}x{altura}"));
+    }
+    Ok(())
+}
+
+fn preparar_frente(c: &Config, largura: u32, altura: u32) -> Result<(), String> {
     let links = "\"msm_csiphy1\":1->\"msm_csid0\":0[1],\
                  \"msm_csid0\":1->\"msm_ispif0\":0[1],\
                  \"msm_ispif0\":1->\"msm_vfe0_rdi0\":0[1]";
@@ -766,13 +873,7 @@ fn preparar(c: &Config, largura: u32, altura: u32) -> Result<String, String> {
     if !topo.contains(&format!("UYVY8_1X16/{largura}x{altura}")) {
         return Err(format!("o sensor não ficou em {largura}x{altura}"));
     }
-    Ok(match &c.video {
-        Some(v) => v.clone(),
-        None => media_ctl(c, &["-e", "msm_vfe0_video0"])
-            .ok()
-            .filter(|s| s.starts_with("/dev/"))
-            .unwrap_or_else(|| "/dev/video0".into()),
-    })
+    Ok(())
 }
 
 // ------------------------------------------------------------------ YUV 4:2:2 -> RGB
@@ -871,6 +972,211 @@ impl Conversor {
     }
 }
 
+// ------------------------------------------------------------------ RAW10 Bayer -> RGB
+
+/// nível de preto do AR0543 (pedestal 42 em 10 bits), nos 8 bits altos
+const PRETO: i32 = 10;
+/// ganho 1,0 nas contas inteiras (1/256)
+const UM: u32 = 256;
+
+/// Somas da pré-visualização (valores lineares, já sem o preto) para o balanço e a exposição.
+#[derive(Default)]
+struct Estat {
+    r: u64,
+    g: u64,
+    b: u64,
+    n: u64,
+}
+
+/// Bayer GRBG (linha par: G R, linha ímpar: B G), RAW10 empacotado (4 pontos em 5 bytes:
+/// os 8 bits altos de cada ponto e um byte com os 2 bits baixos, que aqui são ignorados).
+struct Bayer {
+    /// linear (0..255-PRETO) -> sRGB aproximado (gama 1/2,2)
+    gama: [u8; 256],
+    /// ganhos do balanço de branco (vermelho e azul, em 1/256), mexidos pela thread de captura
+    ganho_r: AtomicU32,
+    ganho_b: AtomicU32,
+}
+
+impl Bayer {
+    fn novo() -> Self {
+        let mut gama = [0u8; 256];
+        let branco = (255 - PRETO) as f32;
+        for (i, g) in gama.iter_mut().enumerate() {
+            *g = (255.0 * (i as f32 / branco).min(1.0).powf(1.0 / 2.2) + 0.5) as u8;
+        }
+        Bayer { gama, ganho_r: AtomicU32::new(UM * 3 / 2), ganho_b: AtomicU32::new(UM * 3 / 2) }
+    }
+
+    #[inline(always)]
+    fn cor(&self, r: i32, g: i32, b: i32, gr: i32, gb: i32, saida: &mut [u8]) {
+        saida[0] = self.gama[((r * gr) >> 8).clamp(0, 255) as usize];
+        saida[1] = self.gama[g.clamp(0, 255) as usize];
+        saida[2] = self.gama[((b * gb) >> 8).clamp(0, 255) as usize];
+    }
+
+    fn ganhos(&self) -> (i32, i32) {
+        (self.ganho_r.load(Ordering::Relaxed) as i32, self.ganho_b.load(Ordering::Relaxed) as i32)
+    }
+
+    /// Metade da resolução: cada quadrado 2x2 (G R / B G) vira 1 ponto.
+    fn previa(&self, src: &[u8], bpl: usize, w: usize, h: usize) -> (Quadro, Estat) {
+        let (ow, oh) = (w / 2, h / 2);
+        let mut q = Quadro::new(ow as u32, oh as u32);
+        let dst = q.make_mut_bytes();
+        let (gr, gb) = self.ganhos();
+        let mut e = Estat::default();
+        let v = |b: u8| (b as i32 - PRETO).max(0);
+        for oy in 0..oh {
+            let l0 = &src[2 * oy * bpl..2 * oy * bpl + w * 5 / 4];
+            let l1 = &src[(2 * oy + 1) * bpl..(2 * oy + 1) * bpl + w * 5 / 4];
+            let base = oy * ow * 3;
+            for ox in 0..ow {
+                let x = 2 * ox;
+                let i = (x >> 2) * 5 + (x & 3);
+                let (g1, r, b, g2) = (v(l0[i]), v(l0[i + 1]), v(l1[i]), v(l1[i + 1]));
+                let g = (g1 + g2) >> 1;
+                if oy & 3 == 0 && ox & 3 == 0 {
+                    e.r += r as u64;
+                    e.g += g as u64;
+                    e.b += b as u64;
+                    e.n += 1;
+                }
+                self.cor(r, g, b, gr, gb, &mut dst[base + ox * 3..base + ox * 3 + 3]);
+            }
+        }
+        (q, e)
+    }
+
+    /// Resolução cheia (foto): interpolação bilinear clássica, RGB8 w*h*3.
+    fn cheia(&self, src: &[u8], bpl: usize, w: usize, h: usize) -> Vec<u8> {
+        let mut dst = vec![0u8; w * h * 3];
+        let (gr, gb) = self.ganhos();
+        // espelha nas bordas mantendo a paridade (a mesma cor do mosaico)
+        let p = |x: isize, y: isize| -> i32 {
+            let x = if x < 0 { -x } else if x >= w as isize { 2 * w as isize - 2 - x } else { x } as usize;
+            let y = if y < 0 { -y } else if y >= h as isize { 2 * h as isize - 2 - y } else { y } as usize;
+            (src[y * bpl + (x >> 2) * 5 + (x & 3)] as i32 - PRETO).max(0)
+        };
+        for y in 0..h as isize {
+            for x in 0..w as isize {
+                let c = p(x, y);
+                let lados = |a: i32, b: i32| (a + b) >> 1;
+                let cruz = || (p(x - 1, y) + p(x + 1, y) + p(x, y - 1) + p(x, y + 1)) >> 2;
+                let diag = || (p(x - 1, y - 1) + p(x + 1, y - 1) + p(x - 1, y + 1) + p(x + 1, y + 1)) >> 2;
+                let (r, g, b) = match (y & 1, x & 1) {
+                    (0, 0) => (lados(p(x - 1, y), p(x + 1, y)), c, lados(p(x, y - 1), p(x, y + 1))),
+                    (0, _) => (c, cruz(), diag()),
+                    (_, 0) => (diag(), cruz(), c),
+                    _ => (lados(p(x, y - 1), p(x, y + 1)), c, lados(p(x - 1, y), p(x + 1, y))),
+                };
+                let o = (y as usize * w + x as usize) * 3;
+                self.cor(r, g, b, gr, gb, &mut dst[o..o + 3]);
+            }
+        }
+        dst
+    }
+}
+
+/// Exposição automática e balanço de branco da traseira (o RDI não tem ISP).
+struct Auto {
+    sub: RawFd,
+    /// linhas de exposição (1..1044) e ganho analógico (32 = 1x)
+    exp: i32,
+    ganho: i32,
+}
+
+const V4L2_CID_EXPOSURE: u32 = 0x0098_0911;
+const V4L2_CID_ANALOGUE_GAIN: u32 = 0x009e_0903;
+const VIDIOC_S_CTRL: u32 = ioc(LER | GRAVAR, 28, 8);
+const EXP_MAX: i32 = 1044;
+const GANHO_MAX: i32 = 256; // até 8x (acima disso só ruído)
+/// média linear do verde desejada (~134 depois da gama)
+const ALVO: f32 = 60.0;
+
+impl Auto {
+    fn abrir(c: &Config) -> Option<Auto> {
+        let no = media_ctl(c, &["-e", &c.sensor_tras]).ok()?;
+        let cpath = std::ffi::CString::new(no).ok()?;
+        let sub = unsafe { libc::open(cpath.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+        if sub < 0 {
+            return None;
+        }
+        let a = Auto { sub, exp: 800, ganho: 64 };
+        a.aplicar();
+        Some(a)
+    }
+
+    fn ctrl(&self, id: u32, valor: i32) {
+        let mut c = [id as i32, valor];
+        if let Err(e) = xioctl(self.sub, VIDIOC_S_CTRL, &mut c) {
+            eprintln!("câmera: S_CTRL {id:#x}={valor}: {e}");
+        }
+    }
+
+    fn aplicar(&self) {
+        self.ctrl(V4L2_CID_EXPOSURE, self.exp);
+        self.ctrl(V4L2_CID_ANALOGUE_GAIN, self.ganho);
+    }
+
+    fn atualizar(&mut self, e: &Estat, bayer: &Bayer) {
+        if e.n == 0 {
+            return;
+        }
+        let (r, g, b) = (e.r as f32 / e.n as f32, e.g as f32 / e.n as f32, e.b as f32 / e.n as f32);
+        // balanço de branco "mundo cinza", suavizado
+        if r > 2.0 && b > 2.0 && g > 2.0 {
+            for (ganho, canal) in [(&bayer.ganho_r, r), (&bayer.ganho_b, b)] {
+                let alvo = (g / canal * UM as f32).clamp(UM as f32 / 2.0, UM as f32 * 4.0);
+                let atual = ganho.load(Ordering::Relaxed) as f32;
+                ganho.store((atual * 0.7 + alvo * 0.3) as u32, Ordering::Relaxed);
+            }
+        }
+        // exposição: anda metade do caminho até o alvo
+        let razao = (ALVO / g.max(1.0)).clamp(0.25, 4.0);
+        if (0.88..1.12).contains(&razao) {
+            return;
+        }
+        let total = self.exp as f32 * self.ganho as f32 / 32.0 * (1.0 + (razao - 1.0) * 0.5);
+        let exp = (total as i32).clamp(1, EXP_MAX);
+        let ganho = ((total * 32.0 / exp as f32) as i32).clamp(32, GANHO_MAX);
+        if (exp, ganho) != (self.exp, self.ganho) {
+            (self.exp, self.ganho) = (exp, ganho);
+            self.aplicar();
+        }
+    }
+}
+
+impl Drop for Auto {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.sub) };
+    }
+}
+
+/// Conversão do quadro conforme a câmera.
+enum Conv {
+    Yuv(Conversor),
+    Bayer(Bayer),
+}
+
+impl Conv {
+    fn previa(&self, src: &[u8], bpl: usize, w: usize, h: usize) -> (Quadro, Option<Estat>) {
+        match self {
+            Conv::Yuv(k) => (k.previa(src, bpl, w, h), None),
+            Conv::Bayer(k) => {
+                let (q, e) = k.previa(src, bpl, w, h);
+                (q, Some(e))
+            }
+        }
+    }
+    fn cheia(&self, src: &[u8], bpl: usize, w: usize, h: usize) -> Vec<u8> {
+        match self {
+            Conv::Yuv(k) => k.cheia(src, bpl, w, h),
+            Conv::Bayer(k) => k.cheia(src, bpl, w, h),
+        }
+    }
+}
+
 // ------------------------------------------------------------------ captura
 
 pub enum Evento {
@@ -961,7 +1267,8 @@ where
 
     // tamanhos em ordem de preferência; só desce se faltar memória contígua
     let mut tamanhos = vec![(c.largura, c.altura)];
-    for t in [(640, 480), (320, 240)] {
+    for t in if c.tras() { &[][..] } else { &[(640, 480), (320, 240)][..] } {
+        let t = *t;
         if t.0 < tamanhos[0].0 && !tamanhos.contains(&t) {
             tamanhos.push(t);
         }
@@ -991,9 +1298,15 @@ where
     if parar.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let ordem = c.ordem.or_else(|| Ordem::de_fourcc(dev.fourcc)).unwrap_or(Ordem::Uyvy);
-    eprintln!("câmera: convertendo como {ordem:?}");
-    let conv = Arc::new(Conversor::novo(ordem, c));
+    let conv = Arc::new(if c.tras() {
+        eprintln!("câmera: traseira, RAW10 Bayer GRBG");
+        Conv::Bayer(Bayer::novo())
+    } else {
+        let ordem = c.ordem.or_else(|| Ordem::de_fourcc(dev.fourcc)).unwrap_or(Ordem::Uyvy);
+        eprintln!("câmera: convertendo como {ordem:?}");
+        Conv::Yuv(Conversor::novo(ordem, c))
+    });
+    let mut auto = if c.tras() { Auto::abrir(c) } else { None };
     let intervalo = Duration::from_millis(1000 / c.fps.max(1) as u64);
     let (w, h, bpl) = (dev.largura, dev.altura, dev.bpl);
 
@@ -1048,8 +1361,11 @@ where
             // pré-visualização a taxa fixa: só converte se a interface já pegou o anterior
             if ultimo.elapsed() >= intervalo && slot.lock().unwrap().is_none() {
                 ultimo = Instant::now();
-                let q = conv.previa(dados, bpl, w, h);
+                let (q, estat) = conv.previa(dados, bpl, w, h);
                 *slot.lock().unwrap() = Some(q);
+                if let (Some(a), Some(e), Conv::Bayer(b)) = (auto.as_mut(), estat, conv.as_ref()) {
+                    a.atualizar(&e, b);
+                }
                 avisar();
             }
         }
@@ -1085,7 +1401,7 @@ fn gravar_jpeg(caminho: &Path, rgb: &[u8], w: u32, h: u32, qualidade: u8) -> Res
 }
 
 fn salvar_foto(
-    conv: &Conversor,
+    conv: &Conv,
     cru: &[u8],
     bpl: usize,
     w: usize,
@@ -1204,6 +1520,22 @@ mod testes {
         assert_eq!(size_of::<ReqBufs>(), 20);
         assert_eq!(VIDIOC_QUERYCAP, 0x8068_5600);
         assert_eq!(VIDIOC_STREAMON, 0x4004_5612);
+    }
+
+    #[test]
+    fn bayer_cinza() {
+        // 4x2 pontos GRBG todos iguais: com ganhos 1,0 sai cinza
+        let b = Bayer::novo();
+        b.ganho_r.store(UM, Ordering::Relaxed);
+        b.ganho_b.store(UM, Ordering::Relaxed);
+        let linha = [100u8, 100, 100, 100, 0];
+        let src: Vec<u8> = linha.iter().chain(linha.iter()).copied().collect();
+        let (q, e) = b.previa(&src, 5, 4, 2);
+        let px = q.as_bytes();
+        assert!(px.iter().all(|&v| v == px[0]), "{px:?}");
+        assert_eq!(e.n, 1);
+        let f = b.cheia(&src, 5, 4, 2);
+        assert!(f.iter().all(|&v| v == px[0]));
     }
 
     #[test]
