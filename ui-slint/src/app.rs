@@ -814,6 +814,12 @@ fn tg_evento(ui: &AppWindow, ev: telegram::Evento) {
             ui.set_tg_bolhas(ModelRc::from(m));
             ui.set_tela(ss("tg-chat"));
         }
+        telegram::Evento::FotoGrande(buf) => {
+            if tela == "tg-foto" {
+                ui.set_tg_foto(Image::from_rgba8(buf));
+                ui.set_tg_foto_carregando(false);
+            }
+        }
         telegram::Evento::Foto(i, buf) => {
             TG_BOLHAS.with_borrow(|b| {
                 if let Some(b) = b {
@@ -1316,6 +1322,23 @@ pub fn ligar(ui: &AppWindow) {
         }
     });
     ui.on_tg_abrir(|i| tg_cmd(telegram::Cmd::Abrir(i.max(0) as usize)));
+    let f = ui.as_weak();
+    ui.on_tg_ver_foto(move |i| {
+        if let Some(ui) = f.upgrade() {
+            // mostra já a versão do balão; a original chega depois (Evento::FotoGrande)
+            let atual = TG_BOLHAS.with_borrow(|b| b.as_ref().and_then(|b| b.row_data(i as usize)));
+            let Some(b) = atual else { return };
+            if b.foto.size().width == 0 {
+                return; // ainda não carregou
+            }
+            ui.set_tg_foto(b.foto.clone());
+            ui.set_tg_foto_carregando(!b.video);
+            ui.set_tela(ss("tg-foto"));
+            if !b.video {
+                tg_cmd(telegram::Cmd::FotoGrande(i.max(0) as usize));
+            }
+        }
+    });
     ui.on_tg_atualizar(|| tg_cmd(telegram::Cmd::Conversas));
     let f = ui.as_weak();
     ui.on_tg_escrever(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Tg("mensagem".into()))));

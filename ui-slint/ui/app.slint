@@ -642,6 +642,7 @@ component TelaTgChat inherits Rectangle {
     in property <[Bolha]> bolhas;
     callback escrever();
     callback voltar();
+    callback ver-foto(int);
     background: Tema.fundo;
     barra := AppBar {
         x: 0; y: 0; width: parent.width;
@@ -658,7 +659,7 @@ component TelaTgChat inherits Rectangle {
             spacing: 10px;
             padding-top: 10px;
             padding-bottom: 10px;
-            for b in root.bolhas: HorizontalLayout {
+            for b[i] in root.bolhas: HorizontalLayout {
                 alignment: b.minha ? end : start;
                 Rectangle {
                     max-width: 860px;
@@ -675,6 +676,7 @@ component TelaTgChat inherits Rectangle {
                             clip: true;
                             background: Tema.superficie-baixa;
                             Image { width: parent.width; height: parent.height; source: b.foto; image-fit: cover; }
+                            TouchArea { clicked => { root.ver-foto(i); } }
                             if b.video: Rectangle {
                                 width: 88px; height: 88px; border-radius: 44px; background: #000000a0;
                                 Image { width: 52px; height: 52px; source: @image-url("icones/play_arrow.svg");
@@ -702,6 +704,25 @@ component TelaTgChat inherits Rectangle {
         background: toque-env.pressed ? Tema.destaque.darker(20%) : Tema.destaque;
         Image { width: 40px; height: 40px; source: @image-url("icones/send.svg"); colorize: Tema.sobre-destaque; }
         toque-env := TouchArea { clicked => { root.escrever(); } }
+    }
+}
+
+// foto em tela cheia: fundo preto, imagem inteira; um toque fecha
+component TelaFoto inherits Rectangle {
+    in property <image> foto;
+    in property <bool> carregando;
+    callback fechar();
+    background: Colors.black;
+    Image { width: parent.width; height: parent.height; source: root.foto; image-fit: contain; }
+    if root.carregando: Rectangle {
+        x: (parent.width - 360px) / 2; y: parent.height - 90px; width: 360px; height: 56px; border-radius: 28px;
+        background: #000000a0;
+        Text { text: "carregando original..."; font-size: 26px; color: Colors.white; }
+    }
+    TouchArea { clicked => { root.fechar(); } }
+    Rectangle {
+        x: 24px; y: 24px; width: 72px; height: 72px; border-radius: 36px; background: #00000080;
+        Image { width: 40px; height: 40px; source: @image-url("icones/close.svg"); colorize: Colors.white; }
     }
 }
 
@@ -873,6 +894,9 @@ export component AppWindow inherits Window {
     callback album-tocar(int);
     callback album-aleatorio();
     in property <[TgConversa]> tg-conversas;
+    in property <image> tg-foto;
+    in property <bool> tg-foto-carregando;
+    callback tg-ver-foto(int);
     callback tg-abrir(int);
     callback tg-atualizar();
     // o Rust chama ao trocar Tema.escuro (Palette guia a MaterialPalette)
@@ -998,6 +1022,11 @@ export component AppWindow inherits Window {
             width: 1280px; height: 720px; nome: root.tg-nome; bolhas: root.tg-bolhas;
             escrever => { root.tg-escrever(); }
             voltar => { root.tg-voltar(); }
+            ver-foto(i) => { root.tg-ver-foto(i); }
+        }
+        if root.tela == "tg-foto": TelaFoto {
+            width: 1280px; height: 720px; foto: root.tg-foto; carregando: root.tg-foto-carregando;
+            fechar => { root.tela = "tg-chat"; }
         }
         if root.tela == "musica-conf": TelaConfMusica {
             width: 1280px; height: 720px; url: root.conf-url; usuario: root.conf-usuario;

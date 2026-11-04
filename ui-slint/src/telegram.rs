@@ -29,6 +29,8 @@ pub enum Cmd {
     Conversas,
     Abrir(usize),
     Enviar(String),
+    /// foto da mensagem i da conversa aberta em resolução completa (tela cheia)
+    FotoGrande(usize),
 }
 
 #[derive(Clone)]
@@ -62,6 +64,8 @@ pub enum Evento {
     Nova(bool, String, Msg, Option<Imagem>),
     /// foto/miniatura da mensagem `i` da conversa aberta
     Foto(usize, Imagem),
+    /// foto em resolução completa para a tela cheia
+    FotoGrande(Imagem),
 }
 
 fn ler_conf() -> Option<(i32, String)> {
@@ -175,6 +179,7 @@ async fn rodar<F: Fn(Evento)>(mut rx: mpsc::UnboundedReceiver<Cmd>, avisar: F) {
     let mut senha_token: Option<PasswordToken> = None;
     let mut conversas: Vec<(PeerRef, String)> = vec![];
     let mut aberta: Option<usize> = None;
+    let mut mensagens: Vec<Message> = vec![];
     let mut stream = None;
 
     let autorizado = client.is_authorized().await.unwrap_or(false);
@@ -249,7 +254,7 @@ async fn rodar<F: Fn(Evento)>(mut rx: mpsc::UnboundedReceiver<Cmd>, avisar: F) {
                 let Some((peer, nome)) = conversas.get(i).cloned() else { continue };
                 aberta = Some(i);
                 let mut it = client.iter_messages(peer).limit(40);
-                let mut mensagens = vec![];
+                mensagens.clear();
                 while let Ok(Some(m)) = it.next().await {
                     mensagens.push(m);
                 }
@@ -267,6 +272,22 @@ async fn rodar<F: Fn(Evento)>(mut rx: mpsc::UnboundedReceiver<Cmd>, avisar: F) {
                     }
                 }
             }
+            Cmd::FotoGrande(i) => {
+                let Some(m) = mensagens.get(i) else { continue };
+                // foto: o arquivo completo; vídeo: a maior miniatura
+                let bytes = match m.media() {
+                    Some(Media::Photo(p)) => baixar(&client, &p).await,
+                    _ => None,
+                };
+                let img = bytes.and_then(|b| image::load_from_memory(&b).ok()).map(|img| {
+                    let img = img.resize(1280, 720, image::imageops::FilterType::Triangle).to_rgba8();
+                    let (w, h) = img.dimensions();
+                    slint::SharedPixelBuffer::clone_from_slice(img.as_raw(), w, h)
+                });
+                if let Some(img) = img {
+                    avisar(Evento::FotoGrande(img));
+                }
+            }
             Cmd::Enviar(texto) => {
                 let Some((peer, _)) = aberta.and_then(|i| conversas.get(i)).map(|x| x.clone()) else { continue };
                 match client.send_message(peer, texto.as_str()).await {
@@ -276,6 +297,15 @@ async fn rodar<F: Fn(Evento)>(mut rx: mpsc::UnboundedReceiver<Cmd>, avisar: F) {
             }
         }
     }
+}
+
+async fn baixar<D: grammers_client::media::Downloadable>(client: &Client, d: &D) -> Option<Vec<u8>> {
+    let mut it = client.iter_download(d);
+    let mut b = vec![];
+    while let Ok(Some(parte)) = it.next().await {
+        b.extend(parte);
+    }
+    (!b.is_empty()).then_some(b)
 }
 
 async fn carregar_conversas<F: Fn(Evento)>(client: &Client, avisar: &F) -> Vec<(PeerRef, String)> {
