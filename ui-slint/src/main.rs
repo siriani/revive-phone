@@ -83,10 +83,11 @@ fn rotacao_acelerometro() -> Option<tela::Rotacao> {
         let p = d.path().join("in_accel_y_raw");
         if let Ok(v) = std::fs::read_to_string(&p) {
             let y: i32 = v.trim().parse().ok()?;
+            // sentido conferido pelo Allan (04/nov): y positivo = R90
             return if y > 600 {
-                Some(tela::Rotacao::R270)
-            } else if y < -600 {
                 Some(tela::Rotacao::R90)
+            } else if y < -600 {
+                Some(tela::Rotacao::R270)
             } else {
                 None
             };
