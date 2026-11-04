@@ -2,7 +2,9 @@
 //!
 //! O Slint desenha direto na memória do /dev/fb0, já girado e no formato do painel
 //! (BGR 24 bits do framebuffer do bootloader, BGRX 32 bits do DRM, RGB565), e só nas
-//! regiões que mudaram desde o quadro anterior.
+//! regiões que mudaram desde o quadro anterior. O desenho é feito numa cópia em memória
+//! ("sombra") e só os retângulos prontos vão para o /dev/fb0: desenhar direto na tela
+//! visível mostrava o fundo antes do conteúdo (a pré-visualização da câmera piscava).
 
 use std::fs::OpenOptions;
 use std::os::fd::{AsRawFd, RawFd};
@@ -82,6 +84,8 @@ impl Rotacao {
 
 pub struct Tela {
     mmap: MmapMut,
+    /// cópia do framebuffer onde o Slint desenha (u32 para alinhar qualquer formato de pixel)
+    sombra: Vec<u32>,
     pub bpp: usize,
     stride_px: usize,
     /// tamanho do painel (retrato), ex.: 720x1280
@@ -114,7 +118,11 @@ impl Tela {
             std::mem::forget(tty);
         }
         let driver = ler(&format!("{sys}/name")).unwrap_or_default();
-        Ok(Tela { mmap, bpp, stride_px: stride / (bpp / 8), pw, ph, rot: Rotacao::R270, driver, redesenhar_tudo: true })
+        let mut sombra = vec![0u32; mmap.len().div_ceil(4)];
+        unsafe {
+            std::ptr::copy_nonoverlapping(mmap.as_ptr(), sombra.as_mut_ptr() as *mut u8, mmap.len())
+        };
+        Ok(Tela { mmap, sombra, bpp, stride_px: stride / (bpp / 8), pw, ph, rot: Rotacao::R270, driver, redesenhar_tudo: true })
     }
 
     /// O driver de vídeo de verdade (DRM) assume e cria outro /dev/fb0.
@@ -128,21 +136,40 @@ impl Tela {
         if tudo {
             r.set_repaint_buffer_type(RepaintBufferType::NewBuffer);
         }
-        let ptr = self.mmap.as_mut_ptr();
+        let ptr = self.sombra.as_mut_ptr() as *mut u8;
         let len = self.mmap.len();
-        unsafe {
+        let regiao = unsafe {
             match self.bpp {
                 32 => {
                     let buf = std::slice::from_raw_parts_mut(ptr as *mut Bgrx8888, len / 4);
-                    r.render(buf, self.stride_px);
+                    r.render(buf, self.stride_px)
                 }
                 16 => {
                     let buf = std::slice::from_raw_parts_mut(ptr as *mut Rgb565Pixel, len / 2);
-                    r.render(buf, self.stride_px);
+                    r.render(buf, self.stride_px)
                 }
                 _ => {
                     let buf = std::slice::from_raw_parts_mut(ptr as *mut Bgr888, len / 3);
-                    r.render(buf, self.stride_px);
+                    r.render(buf, self.stride_px)
+                }
+            }
+        };
+        // copia para a tela só o que mudou, linha a linha, já pronto
+        let bpp = self.bpp / 8;
+        let linha = self.stride_px * bpp;
+        let sombra = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
+        let tela = &mut self.mmap[..];
+        let retangulos: Vec<_> = if tudo {
+            vec![(0usize, 0usize, self.stride_px, len / linha)]
+        } else {
+            regiao.iter().map(|(o, t)| (o.x.max(0) as usize, o.y.max(0) as usize, t.width as usize, t.height as usize)).collect()
+        };
+        for (x, y, w, h) in retangulos {
+            for l in y..(y + h).min(len / linha) {
+                let ini = l * linha + x * bpp;
+                let fim = (ini + w * bpp).min((l + 1) * linha);
+                if ini < fim {
+                    tela[ini..fim].copy_from_slice(&sombra[ini..fim]);
                 }
             }
         }
