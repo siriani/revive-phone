@@ -1,0 +1,57 @@
+From e880e0b98b92c77382728c3e02699bb467a14115 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:31:55 -0300
+Subject: [PATCH 5/6] ASoC: qcom: qdsp6: q6asm-dai: escolhe o DAI pelo id do
+ front-end
+
+O argumento de sound-dai = <&q6asmdai N> e o id do front-end
+(MSM_FRONTEND_DAI_*), mas sem of_xlate_dai_name o ASoC usa N como
+posicao no array de DAIs, que segue a ordem dos filhos do no. Com o DTB
+do falcon gerado por fdtoverlay os filhos ficam invertidos (dai@1 antes
+de dai@0) e o MultiMedia1 virava o DAI de captura do MultiMedia2.
+Procura o DAI pelo id.
+---
+ sound/soc/qcom/qdsp6/q6asm-dai.c | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index 89b453a70..6c9e46b7b 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -1201,7 +1201,33 @@ static const struct snd_soc_dapm_widget q6asm_dapm_widgets[] = {
+ 	SND_SOC_DAPM_AIF_OUT("MM_UL8", "MultiMedia8 Capture", 0, SND_SOC_NOPM, 0, 0),
+ };
+ 
++/*
++ * O argumento do sound-dai e o id do front-end (MSM_FRONTEND_DAI_*), nao a
++ * posicao do DAI: os DAIs sao criados na ordem dos filhos do no, e essa
++ * ordem nao e garantida (o fdtoverlay, por exemplo, inverte os subnos).
++ */
++static int q6asm_dai_of_xlate_dai_name(struct snd_soc_component *component,
++				       const struct of_phandle_args *args,
++				       const char **dai_name)
++{
++	struct q6asm_dai_data *pdata = dev_get_drvdata(component->dev);
++	int i;
++
++	if (args->args_count != 1)
++		return -EINVAL;
++
++	for (i = 0; i < pdata->num_dais; i++) {
++		if (pdata->dais[i].id == args->args[0]) {
++			*dai_name = pdata->dais[i].name;
++			return 0;
++		}
++	}
++
++	return -EINVAL;
++}
++
+ static const struct snd_soc_component_driver q6asm_fe_dai_component = {
++	.of_xlate_dai_name	= q6asm_dai_of_xlate_dai_name,
+ 	.name			= DRV_NAME,
+ 	.open			= q6asm_dai_open,
+ 	.hw_params		= q6asm_dai_hw_params,
+-- 
+2.43.0
+

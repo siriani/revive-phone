@@ -1,0 +1,35 @@
+From 9d607547509242f9bc5101bbdec8727633322051 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:11:59 -0300
+Subject: [PATCH 1/3] regmap: slimbus: corrige o contexto do barramento em
+ __devm_regmap_init_slimbus
+
+__devm_regmap_init_slimbus() passa &slimbus, o endereco do proprio
+argumento na pilha, como contexto do barramento. Depois do retorno esse
+ponteiro nao vale mais, e regmap_slimbus_read/write() o tratam como a
+struct slim_device: o primeiro acesso le um slim_controller invalido e
+o kernel cai em slim_do_transfer() (visto no MSM8226 ao carregar o codec
+WCD9306 com devm_regmap_init_slimbus()).
+
+Usa &slimbus->dev, como __regmap_init_slimbus() ja faz. Nenhum driver da
+arvore usa a variante devm, por isso o erro passou despercebido.
+---
+ drivers/base/regmap/regmap-slimbus.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/base/regmap/regmap-slimbus.c b/drivers/base/regmap/regmap-slimbus.c
+index 54eb7d227..edfee18fb 100644
+--- a/drivers/base/regmap/regmap-slimbus.c
++++ b/drivers/base/regmap/regmap-slimbus.c
+@@ -63,7 +63,7 @@ struct regmap *__devm_regmap_init_slimbus(struct slim_device *slimbus,
+ 	if (IS_ERR(bus))
+ 		return ERR_CAST(bus);
+ 
+-	return __devm_regmap_init(&slimbus->dev, bus, &slimbus, config,
++	return __devm_regmap_init(&slimbus->dev, bus, &slimbus->dev, config,
+ 				  lock_key, lock_name);
+ }
+ EXPORT_SYMBOL_GPL(__devm_regmap_init_slimbus);
+-- 
+2.43.0
+

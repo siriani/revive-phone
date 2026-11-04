@@ -1,0 +1,2906 @@
+From 879f1e66a16e430c7557b9db192eaef1503dca4e Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:12:23 -0300
+Subject: [PATCH 3/3] ASoC: codecs: wcd9306: caminho do alto-falante (SLIMbus
+ RX -> classe D)
+
+Troca o esqueleto (so chip id) por um driver de verdade para o codec
+tapan do MSM8226, portado do driver msm-3.4 (wcd9306.c, wcd9xxx-resmgr.c,
+wcd9xxx-core.c, wcd9xxx-slimslave.c; GPL-2.0, copyright da Linux
+Foundation mantido) com a estrutura do wcd9335 mainline:
+
+- PGD (registradores, base 0x800) e IFD (portas SLIMbus) com regmap;
+  o IFD e achado pelo endereco de enumeracao (dev_index 0);
+- reset, alimentacoes estaticas (vdd-h, vdd-px, vdd-cx) e o bring-up do
+  wcd9xxx-core; defaults e reg_init do tapan (2.x e 1.0);
+- deteccao WCD9306/WCD9302 pelo QFUSE (tapan_check_wcd9306): no 9302 o
+  alto-falante usa o RX3, no 9306 o RX4;
+- clock: MCLK do DT (9,6 MHz) ou, sem MCLK, o oscilador RC interno
+  (allow_rco, so para teste), com as sequencias de bandgap e clock block;
+- DAI de reproducao wcd9306_rx1 (AIF1 PB, SLIM RX1..RX5) com
+  set_channel_map/get_channel_map, hw_params e trigger com slim_stream;
+- DAPM: SLIM RXn -> interpolador -> SPK DAC -> SPK PA -> SPK_OUT, com
+  RXn Digital Volume, SPK DRV Volume, SPK DAC Switch e mute do
+  interpolador (RXn_B6 bit 0, como no msm8916-wcd-digital);
+- sidetone AMIC1 -> ADC1 -> DEC1 -> IIR1 -> interpolador, com micbias 1
+  (cfilt1, LDO_H 3,0 V) e o DEC1 com HPF.
+
+Sem fone, earpiece, lineout, classe H, compander, ANC, MBHC, TX nem
+interrupcoes do codec.
+---
+ sound/soc/codecs/Kconfig          |    9 +-
+ sound/soc/codecs/Makefile         |    2 +-
+ sound/soc/codecs/wcd9306-tables.c |  496 ++++++++
+ sound/soc/codecs/wcd9306.c        | 1739 +++++++++++++++++++++++++++--
+ sound/soc/codecs/wcd9306.h        |  520 +++++++++
+ 5 files changed, 2681 insertions(+), 85 deletions(-)
+ create mode 100644 sound/soc/codecs/wcd9306-tables.c
+ create mode 100644 sound/soc/codecs/wcd9306.h
+
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 8a1091861..c2fdc984a 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -2228,11 +2228,14 @@ config SND_SOC_WCD_CLASSH
+ 	tristate
+ 
+ config SND_SOC_WCD9306
+-	tristate "WCD9306 Codec (esqueleto, so chip id)"
++	tristate "WCD9306/WCD9302 (tapan) Codec"
+ 	depends on SLIMBUS
++	select REGMAP_SLIMBUS
+ 	help
+-	  Esqueleto do codec WCD9306 (tapan) do MSM8226, ligado por SLIMbus.
+-	  Por enquanto so enumera e le o chip id para o log. Sem audio.
++	  Qualcomm WCD9306 and WCD9302 (tapan) audio codecs on SLIMbus, used
++	  with the MSM8226 (e.g. Motorola Moto G 2013). Supports the speaker
++	  playback path (SLIMbus RX to the class-D speaker driver) and the
++	  sidetone path.
+ 
+ config SND_SOC_WCD9335
+ 	tristate "WCD9335 Codec"
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index b14e07a58..cd820f6bd 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -340,7 +340,7 @@ snd-soc-uda1380-y := uda1380.o
+ snd-soc-wcd-classh-y := wcd-clsh-v2.o
+ snd-soc-wcd-mbhc-y := wcd-mbhc-v2.o
+ snd-soc-wcd9335-y := wcd9335.o
+-snd-soc-wcd9306-y := wcd9306.o
++snd-soc-wcd9306-y := wcd9306.o wcd9306-tables.o
+ snd-soc-wcd934x-y := wcd934x.o
+ snd-soc-wcd937x-y := wcd937x.o
+ snd-soc-wcd937x-sdw-y := wcd937x-sdw.o
+diff --git a/sound/soc/codecs/wcd9306-tables.c b/sound/soc/codecs/wcd9306-tables.c
+new file mode 100644
+index 000000000..d2ead5cac
+--- /dev/null
++++ b/sound/soc/codecs/wcd9306-tables.c
+@@ -0,0 +1,496 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (c) 2012, The Linux Foundation. All rights reserved.
++ *
++ * Readable-register table of the WCD9306 (tapan), from the msm-3.4 kernel
++ * (sound/soc/codecs/wcd9306-tables.c), GPL-2.0 only.
++ */
++#include <linux/types.h>
++#include "wcd9306.h"
++
++const u8 wcd9306_reg_readable[TAPAN_NUM_REGISTERS] = {
++	[TAPAN_A_CHIP_CTL] = 1,
++	[TAPAN_A_CHIP_STATUS] = 1,
++	[TAPAN_A_CHIP_ID_BYTE_0] = 1,
++	[TAPAN_A_CHIP_ID_BYTE_1] = 1,
++	[TAPAN_A_CHIP_ID_BYTE_2] = 1,
++	[TAPAN_A_CHIP_ID_BYTE_3] = 1,
++	[TAPAN_A_CHIP_VERSION] = 1,
++	[TAPAN_A_CHIP_DEBUG_CTL] = 1,
++	[TAPAN_A_SLAVE_ID_1] = 1,
++	[TAPAN_A_SLAVE_ID_2] = 1,
++	[TAPAN_A_SLAVE_ID_3] = 1,
++	[TAPAN_A_PIN_CTL_OE0] = 1,
++	[TAPAN_A_PIN_CTL_DATA0] = 1,
++	[TAPAN_A_HDRIVE_GENERIC] = 1,
++	[TAPAN_A_HDRIVE_OVERRIDE] = 1,
++	[TAPAN_A_ANA_CSR_WAIT_STATE] = 1,
++	[TAPAN_A_PROCESS_MONITOR_CTL0] = 1,
++	[TAPAN_A_PROCESS_MONITOR_CTL1] = 1,
++	[TAPAN_A_PROCESS_MONITOR_CTL2] = 1,
++	[TAPAN_A_PROCESS_MONITOR_CTL3] = 1,
++	[TAPAN_A_QFUSE_CTL] = 1,
++	[TAPAN_A_QFUSE_STATUS] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT0] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT1] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT2] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT3] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT4] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT5] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT6] = 1,
++	[TAPAN_A_QFUSE_DATA_OUT7] = 1,
++	[TAPAN_A_CDC_CTL] = 1,
++	[TAPAN_A_LEAKAGE_CTL] = 1,
++	[TAPAN_A_INTR_MODE] = 1,
++	[TAPAN_A_INTR_MASK0] = 1,
++	[TAPAN_A_INTR_MASK1] = 1,
++	[TAPAN_A_INTR_MASK2] = 1,
++	[TAPAN_A_INTR_MASK3] = 1,
++	[TAPAN_A_INTR_STATUS0] = 1,
++	[TAPAN_A_INTR_STATUS1] = 1,
++	[TAPAN_A_INTR_STATUS2] = 1,
++	[TAPAN_A_INTR_STATUS3] = 1,
++	[TAPAN_A_INTR_LEVEL0] = 1,
++	[TAPAN_A_INTR_LEVEL1] = 1,
++	[TAPAN_A_INTR_LEVEL2] = 1,
++	[TAPAN_A_INTR_LEVEL3] = 1,
++	[TAPAN_A_INTR_TEST0] = 1,
++	[TAPAN_A_INTR_TEST1] = 1,
++	[TAPAN_A_INTR_TEST2] = 1,
++	[TAPAN_A_INTR_TEST3] = 1,
++	[TAPAN_A_INTR_SET0] = 1,
++	[TAPAN_A_INTR_SET1] = 1,
++	[TAPAN_A_INTR_SET2] = 1,
++	[TAPAN_A_INTR_SET3] = 1,
++	[TAPAN_A_INTR_DESTN0] = 1,
++	[TAPAN_A_INTR_DESTN1] = 1,
++	[TAPAN_A_INTR_DESTN2] = 1,
++	[TAPAN_A_INTR_DESTN3] = 1,
++	[TAPAN_A_CDC_DMIC_DATA0_MODE] = 1,
++	[TAPAN_A_CDC_DMIC_CLK0_MODE] = 1,
++	[TAPAN_A_CDC_DMIC_DATA1_MODE] = 1,
++	[TAPAN_A_CDC_DMIC_CLK1_MODE] = 1,
++	[TAPAN_A_CDC_INTR_MODE] = 1,
++	[TAPAN_A_BIAS_REF_CTL] = 1,
++	[TAPAN_A_BIAS_CENTRAL_BG_CTL] = 1,
++	[TAPAN_A_BIAS_PRECHRG_CTL] = 1,
++	[TAPAN_A_BIAS_CURR_CTL_1] = 1,
++	[TAPAN_A_BIAS_CURR_CTL_2] = 1,
++	[TAPAN_A_BIAS_OSC_BG_CTL] = 1,
++	[TAPAN_A_CLK_BUFF_EN1] = 1,
++	[TAPAN_A_CLK_BUFF_EN2] = 1,
++	[TAPAN_A_LDO_H_MODE_1] = 1,
++	[TAPAN_A_LDO_H_MODE_2] = 1,
++	[TAPAN_A_LDO_H_LOOP_CTL] = 1,
++	[TAPAN_A_LDO_H_COMP_1] = 1,
++	[TAPAN_A_LDO_H_COMP_2] = 1,
++	[TAPAN_A_LDO_H_BIAS_1] = 1,
++	[TAPAN_A_LDO_H_BIAS_2] = 1,
++	[TAPAN_A_LDO_H_BIAS_3] = 1,
++	[TAPAN_A_MICB_CFILT_1_CTL] = 1,
++	[TAPAN_A_MICB_CFILT_1_VAL] = 1,
++	[TAPAN_A_MICB_CFILT_1_PRECHRG] = 1,
++	[TAPAN_A_MICB_1_CTL] = 1,
++	[TAPAN_A_MICB_1_INT_RBIAS] = 1,
++	[TAPAN_A_MICB_1_MBHC] = 1,
++	[TAPAN_A_MICB_CFILT_2_CTL] = 1,
++	[TAPAN_A_MICB_CFILT_2_VAL] = 1,
++	[TAPAN_A_MICB_CFILT_2_PRECHRG] = 1,
++	[TAPAN_A_MICB_2_CTL] = 1,
++	[TAPAN_A_MICB_2_INT_RBIAS] = 1,
++	[TAPAN_A_MICB_2_MBHC] = 1,
++	[TAPAN_A_MICB_CFILT_3_CTL] = 1,
++	[TAPAN_A_MICB_CFILT_3_VAL] = 1,
++	[TAPAN_A_MICB_CFILT_3_PRECHRG] = 1,
++	[TAPAN_A_MICB_3_CTL] = 1,
++	[TAPAN_A_MICB_3_INT_RBIAS] = 1,
++	[TAPAN_A_MICB_3_MBHC] = 1,
++	[TAPAN_A_MBHC_INSERT_DETECT] = 1,
++	[TAPAN_A_MBHC_INSERT_DET_STATUS] = 1,
++	[TAPAN_A_TX_COM_BIAS] = 1,
++	[TAPAN_A_MBHC_SCALING_MUX_1] = 1,
++	[TAPAN_A_MBHC_SCALING_MUX_2] = 1,
++	[TAPAN_A_RESERVED_MAD_ANA_CTRL] = 1,
++	[TAPAN_A_TX_SUP_SWITCH_CTRL_1] = 1,
++	[TAPAN_A_TX_SUP_SWITCH_CTRL_2] = 1,
++	[TAPAN_A_TX_1_EN] = 1,
++	[TAPAN_A_TX_2_EN] = 1,
++	[TAPAN_A_TX_1_2_ADC_CH1] = 1,
++	[TAPAN_A_TX_1_2_ADC_CH2] = 1,
++	[TAPAN_A_TX_1_2_ATEST_REFCTRL] = 1,
++	[TAPAN_A_TX_1_2_TEST_CTL] = 1,
++	[TAPAN_A_TX_1_2_TEST_BLOCK_EN] = 1,
++	[TAPAN_A_TX_1_2_TXFE_CLKDIV] = 1,
++	[TAPAN_A_TX_1_2_SAR_ERR_CH1] = 1,
++	[TAPAN_A_TX_1_2_SAR_ERR_CH2] = 1,
++	[TAPAN_A_TX_3_EN] = 1,
++	[TAPAN_A_TX_1_2_TEST_EN] = 1,
++	[TAPAN_A_TX_4_5_TXFE_SC_CTL] = 1,
++	[TAPAN_A_TX_4_5_TEST_EN] = 1,
++	[TAPAN_A_TX_4_EN] = 1,
++	[TAPAN_A_TX_5_EN] = 1,
++	[TAPAN_A_TX_4_5_ADC_CH4] = 1,
++	[TAPAN_A_TX_4_5_ADC_CH5] = 1,
++	[TAPAN_A_TX_4_5_ATEST_REFCTRL] = 1,
++	[TAPAN_A_TX_4_5_TEST_CTL] = 1,
++	[TAPAN_A_TX_4_5_TEST_BLOCK_EN] = 1,
++	[TAPAN_A_TX_4_5_TXFE_CKDIV] = 1,
++	[TAPAN_A_TX_4_5_SAR_ERR_CH4] = 1,
++	[TAPAN_A_TX_4_5_SAR_ERR_CH5] = 1,
++	[TAPAN_A_TX_7_MBHC_EN] = 1,
++	[TAPAN_A_TX_7_MBHC_ATEST_REFCTRL] = 1,
++	[TAPAN_A_TX_7_MBHC_ADC] = 1,
++	[TAPAN_A_TX_7_MBHC_TEST_CTL] = 1,
++	[TAPAN_A_TX_7_MBHC_SAR_ERR] = 1,
++	[TAPAN_A_TX_7_TXFE_CLKDIV] = 1,
++	[TAPAN_A_BUCK_MODE_1] = 1,
++	[TAPAN_A_BUCK_MODE_2] = 1,
++	[TAPAN_A_BUCK_MODE_3] = 1,
++	[TAPAN_A_BUCK_MODE_4] = 1,
++	[TAPAN_A_BUCK_MODE_5] = 1,
++	[TAPAN_A_BUCK_CTRL_VCL_1] = 1,
++	[TAPAN_A_BUCK_CTRL_VCL_2] = 1,
++	[TAPAN_A_BUCK_CTRL_VCL_3] = 1,
++	[TAPAN_A_BUCK_CTRL_CCL_1] = 1,
++	[TAPAN_A_BUCK_CTRL_CCL_2] = 1,
++	[TAPAN_A_BUCK_CTRL_CCL_3] = 1,
++	[TAPAN_A_BUCK_CTRL_CCL_4] = 1,
++	[TAPAN_A_BUCK_CTRL_PWM_DRVR_1] = 1,
++	[TAPAN_A_BUCK_CTRL_PWM_DRVR_2] = 1,
++	[TAPAN_A_BUCK_CTRL_PWM_DRVR_3] = 1,
++	[TAPAN_A_BUCK_TMUX_A_D] = 1,
++	[TAPAN_A_NCP_BUCKREF] = 1,
++	[TAPAN_A_NCP_EN] = 1,
++	[TAPAN_A_NCP_CLK] = 1,
++	[TAPAN_A_NCP_STATIC] = 1,
++	[TAPAN_A_NCP_VTH_LOW] = 1,
++	[TAPAN_A_NCP_VTH_HIGH] = 1,
++	[TAPAN_A_NCP_ATEST] = 1,
++	[TAPAN_A_NCP_DTEST] = 1,
++	[TAPAN_A_NCP_DLY1] = 1,
++	[TAPAN_A_NCP_DLY2] = 1,
++	[TAPAN_A_RX_AUX_SW_CTL] = 1,
++	[TAPAN_A_RX_PA_AUX_IN_CONN] = 1,
++	[TAPAN_A_RX_COM_TIMER_DIV] = 1,
++	[TAPAN_A_RX_COM_OCP_CTL] = 1,
++	[TAPAN_A_RX_COM_OCP_COUNT] = 1,
++	[TAPAN_A_RX_COM_DAC_CTL] = 1,
++	[TAPAN_A_RX_COM_BIAS] = 1,
++	[TAPAN_A_RX_HPH_AUTO_CHOP] = 1,
++	[TAPAN_A_RX_HPH_CHOP_CTL] = 1,
++	[TAPAN_A_RX_HPH_BIAS_PA] = 1,
++	[TAPAN_A_RX_HPH_BIAS_LDO] = 1,
++	[TAPAN_A_RX_HPH_BIAS_CNP] = 1,
++	[TAPAN_A_RX_HPH_BIAS_WG_OCP] = 1,
++	[TAPAN_A_RX_HPH_OCP_CTL] = 1,
++	[TAPAN_A_RX_HPH_CNP_EN] = 1,
++	[TAPAN_A_RX_HPH_CNP_WG_CTL] = 1,
++	[TAPAN_A_RX_HPH_CNP_WG_TIME] = 1,
++	[TAPAN_A_RX_HPH_L_GAIN] = 1,
++	[TAPAN_A_RX_HPH_L_TEST] = 1,
++	[TAPAN_A_RX_HPH_L_PA_CTL] = 1,
++	[TAPAN_A_RX_HPH_L_DAC_CTL] = 1,
++	[TAPAN_A_RX_HPH_L_ATEST] = 1,
++	[TAPAN_A_RX_HPH_L_STATUS] = 1,
++	[TAPAN_A_RX_HPH_R_GAIN] = 1,
++	[TAPAN_A_RX_HPH_R_TEST] = 1,
++	[TAPAN_A_RX_HPH_R_PA_CTL] = 1,
++	[TAPAN_A_RX_HPH_R_DAC_CTL] = 1,
++	[TAPAN_A_RX_HPH_R_ATEST] = 1,
++	[TAPAN_A_RX_HPH_R_STATUS] = 1,
++	[TAPAN_A_RX_EAR_BIAS_PA] = 1,
++	[TAPAN_A_RX_EAR_BIAS_CMBUFF] = 1,
++	[TAPAN_A_RX_EAR_EN] = 1,
++	[TAPAN_A_RX_EAR_GAIN] = 1,
++	[TAPAN_A_RX_EAR_CMBUFF] = 1,
++	[TAPAN_A_RX_EAR_ICTL] = 1,
++	[TAPAN_A_RX_EAR_CCOMP] = 1,
++	[TAPAN_A_RX_EAR_VCM] = 1,
++	[TAPAN_A_RX_EAR_CNP] = 1,
++	[TAPAN_A_RX_EAR_DAC_CTL_ATEST] = 1,
++	[TAPAN_A_RX_EAR_STATUS] = 1,
++	[TAPAN_A_RX_LINE_BIAS_PA] = 1,
++	[TAPAN_A_RX_BUCK_BIAS1] = 1,
++	[TAPAN_A_RX_BUCK_BIAS2] = 1,
++	[TAPAN_A_RX_LINE_COM] = 1,
++	[TAPAN_A_RX_LINE_CNP_EN] = 1,
++	[TAPAN_A_RX_LINE_CNP_WG_CTL] = 1,
++	[TAPAN_A_RX_LINE_CNP_WG_TIME] = 1,
++	[TAPAN_A_RX_LINE_1_GAIN] = 1,
++	[TAPAN_A_RX_LINE_1_TEST] = 1,
++	[TAPAN_A_RX_LINE_1_DAC_CTL] = 1,
++	[TAPAN_A_RX_LINE_1_STATUS] = 1,
++	[TAPAN_A_RX_LINE_2_GAIN] = 1,
++	[TAPAN_A_RX_LINE_2_TEST] = 1,
++	[TAPAN_A_RX_LINE_2_DAC_CTL] = 1,
++	[TAPAN_A_RX_LINE_2_STATUS] = 1,
++	[TAPAN_A_RX_LINE_CNP_DBG] = 1,
++	[TAPAN_A_SPKR_DRV_EN] = 1,
++	[TAPAN_A_SPKR_DRV_GAIN] = 1,
++	[TAPAN_A_SPKR_DRV_DAC_CTL] = 1,
++	[TAPAN_A_SPKR_DRV_OCP_CTL] = 1,
++	[TAPAN_A_SPKR_DRV_CLIP_DET] = 1,
++	[TAPAN_A_SPKR_DRV_IEC] = 1,
++	[TAPAN_A_SPKR_DRV_DBG_DAC] = 1,
++	[TAPAN_A_SPKR_DRV_DBG_PA] = 1,
++	[TAPAN_A_SPKR_DRV_DBG_PWRSTG] = 1,
++	[TAPAN_A_SPKR_DRV_BIAS_LDO] = 1,
++	[TAPAN_A_SPKR_DRV_BIAS_INT] = 1,
++	[TAPAN_A_SPKR_DRV_BIAS_PA] = 1,
++	[TAPAN_A_SPKR_DRV_STATUS_OCP] = 1,
++	[TAPAN_A_SPKR_DRV_STATUS_PA] = 1,
++	[TAPAN_A_RC_OSC_FREQ] = 1,
++	[TAPAN_A_RC_OSC_TEST] = 1,
++	[TAPAN_A_RC_OSC_STATUS] = 1,
++	[TAPAN_A_RC_OSC_TUNER] = 1,
++	[TAPAN_A_MBHC_HPH] = 1,
++	[TAPAN_A_CDC_ANC1_B1_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_B1_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_SHIFT] = 1,
++	[TAPAN_A_CDC_ANC2_SHIFT] = 1,
++	[TAPAN_A_CDC_ANC1_IIR_B1_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_IIR_B1_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_IIR_B2_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_IIR_B2_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_IIR_B3_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_IIR_B3_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_LPF_B1_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_LPF_B1_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_LPF_B2_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_LPF_B2_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_SPARE] = 1,
++	[TAPAN_A_CDC_ANC2_SPARE] = 1,
++	[TAPAN_A_CDC_ANC1_SMLPF_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_SMLPF_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_DCFLT_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_DCFLT_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_GAIN_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_GAIN_CTL] = 1,
++	[TAPAN_A_CDC_ANC1_B2_CTL] = 1,
++	[TAPAN_A_CDC_ANC2_B2_CTL] = 1,
++	[TAPAN_A_CDC_TX1_VOL_CTL_TIMER] = 1,
++	[TAPAN_A_CDC_TX2_VOL_CTL_TIMER] = 1,
++	[TAPAN_A_CDC_TX3_VOL_CTL_TIMER] = 1,
++	[TAPAN_A_CDC_TX4_VOL_CTL_TIMER] = 1,
++	[TAPAN_A_CDC_TX1_VOL_CTL_GAIN] = 1,
++	[TAPAN_A_CDC_TX2_VOL_CTL_GAIN] = 1,
++	[TAPAN_A_CDC_TX3_VOL_CTL_GAIN] = 1,
++	[TAPAN_A_CDC_TX4_VOL_CTL_GAIN] = 1,
++	[TAPAN_A_CDC_TX1_VOL_CTL_CFG] = 1,
++	[TAPAN_A_CDC_TX2_VOL_CTL_CFG] = 1,
++	[TAPAN_A_CDC_TX3_VOL_CTL_CFG] = 1,
++	[TAPAN_A_CDC_TX4_VOL_CTL_CFG] = 1,
++	[TAPAN_A_CDC_TX1_MUX_CTL] = 1,
++	[TAPAN_A_CDC_TX2_MUX_CTL] = 1,
++	[TAPAN_A_CDC_TX3_MUX_CTL] = 1,
++	[TAPAN_A_CDC_TX4_MUX_CTL] = 1,
++	[TAPAN_A_CDC_TX1_CLK_FS_CTL] = 1,
++	[TAPAN_A_CDC_TX2_CLK_FS_CTL] = 1,
++	[TAPAN_A_CDC_TX3_CLK_FS_CTL] = 1,
++	[TAPAN_A_CDC_TX4_CLK_FS_CTL] = 1,
++	[TAPAN_A_CDC_TX1_DMIC_CTL] = 1,
++	[TAPAN_A_CDC_TX2_DMIC_CTL] = 1,
++	[TAPAN_A_CDC_TX3_DMIC_CTL] = 1,
++	[TAPAN_A_CDC_TX4_DMIC_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B1_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B2_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B3_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B4_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B5_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B6_CTL] = 1,
++	[TAPAN_A_CDC_DEBUG_B7_CTL] = 1,
++	[TAPAN_A_CDC_SRC1_PDA_CFG] = 1,
++	[TAPAN_A_CDC_SRC2_PDA_CFG] = 1,
++	[TAPAN_A_CDC_SRC1_FS_CTL] = 1,
++	[TAPAN_A_CDC_SRC2_FS_CTL] = 1,
++	[TAPAN_A_CDC_RX1_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX2_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX3_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX4_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX1_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX2_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX3_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX4_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX1_B3_CTL] = 1,
++	[TAPAN_A_CDC_RX2_B3_CTL] = 1,
++	[TAPAN_A_CDC_RX3_B3_CTL] = 1,
++	[TAPAN_A_CDC_RX4_B3_CTL] = 1,
++	[TAPAN_A_CDC_RX1_B4_CTL] = 1,
++	[TAPAN_A_CDC_RX2_B4_CTL] = 1,
++	[TAPAN_A_CDC_RX3_B4_CTL] = 1,
++	[TAPAN_A_CDC_RX4_B4_CTL] = 1,
++	[TAPAN_A_CDC_RX1_B5_CTL] = 1,
++	[TAPAN_A_CDC_RX2_B5_CTL] = 1,
++	[TAPAN_A_CDC_RX3_B5_CTL] = 1,
++	[TAPAN_A_CDC_RX4_B5_CTL] = 1,
++	[TAPAN_A_CDC_RX1_B6_CTL] = 1,
++	[TAPAN_A_CDC_RX2_B6_CTL] = 1,
++	[TAPAN_A_CDC_RX3_B6_CTL] = 1,
++	[TAPAN_A_CDC_RX4_B6_CTL] = 1,
++	[TAPAN_A_CDC_RX1_VOL_CTL_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX2_VOL_CTL_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX3_VOL_CTL_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX4_VOL_CTL_B1_CTL] = 1,
++	[TAPAN_A_CDC_RX1_VOL_CTL_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX2_VOL_CTL_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX3_VOL_CTL_B2_CTL] = 1,
++	[TAPAN_A_CDC_RX4_VOL_CTL_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLK_ANC_RESET_CTL] = 1,
++	[TAPAN_A_CDC_CLK_RX_RESET_CTL] = 1,
++	[TAPAN_A_CDC_CLK_TX_RESET_B1_CTL] = 1,
++	[TAPAN_A_CDC_CLK_TX_RESET_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLK_DMIC_B1_CTL] = 1,
++	[TAPAN_A_CDC_CLK_DMIC_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLK_I2S_CTL] = 1,
++	[TAPAN_A_CDC_CLK_OTHR_RESET_B1_CTL] = 1,
++	[TAPAN_A_CDC_CLK_OTHR_RESET_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLK_TX_CLK_EN_B1_CTL] = 1,
++	[TAPAN_A_CDC_CLK_TX_CLK_EN_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLK_OTHR_CTL] = 1,
++	[TAPAN_A_CDC_CLK_RDAC_CLK_EN_CTL] = 1,
++	[TAPAN_A_CDC_CLK_ANC_CLK_EN_CTL] = 1,
++	[TAPAN_A_CDC_CLK_RX_B1_CTL] = 1,
++	[TAPAN_A_CDC_CLK_RX_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLK_MCLK_CTL] = 1,
++	[TAPAN_A_CDC_CLK_PDM_CTL] = 1,
++	[TAPAN_A_CDC_CLK_SD_CTL] = 1,
++	[TAPAN_A_CDC_CLK_POWER_CTL] = 1,
++	[TAPAN_A_CDC_CLSH_B1_CTL] = 1,
++	[TAPAN_A_CDC_CLSH_B2_CTL] = 1,
++	[TAPAN_A_CDC_CLSH_B3_CTL] = 1,
++	[TAPAN_A_CDC_CLSH_BUCK_NCP_VARS] = 1,
++	[TAPAN_A_CDC_CLSH_IDLE_HPH_THSD] = 1,
++	[TAPAN_A_CDC_CLSH_IDLE_EAR_THSD] = 1,
++	[TAPAN_A_CDC_CLSH_FCLKONLY_HPH_THSD] = 1,
++	[TAPAN_A_CDC_CLSH_FCLKONLY_EAR_THSD] = 1,
++	[TAPAN_A_CDC_CLSH_K_ADDR] = 1,
++	[TAPAN_A_CDC_CLSH_K_DATA] = 1,
++	[TAPAN_A_CDC_CLSH_I_PA_FACT_HPH_L] = 1,
++	[TAPAN_A_CDC_CLSH_I_PA_FACT_HPH_U] = 1,
++	[TAPAN_A_CDC_CLSH_I_PA_FACT_EAR_L] = 1,
++	[TAPAN_A_CDC_CLSH_I_PA_FACT_EAR_U] = 1,
++	[TAPAN_A_CDC_CLSH_V_PA_HD_EAR] = 1,
++	[TAPAN_A_CDC_CLSH_V_PA_HD_HPH] = 1,
++	[TAPAN_A_CDC_CLSH_V_PA_MIN_EAR] = 1,
++	[TAPAN_A_CDC_CLSH_V_PA_MIN_HPH] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B1_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B1_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B2_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B2_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B3_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B3_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B4_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B4_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B5_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B5_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B6_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B6_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B7_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B7_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_B8_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_B8_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_GAIN_TIMER_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_GAIN_TIMER_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_COEF_B1_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_COEF_B1_CTL] = 1,
++	[TAPAN_A_CDC_IIR1_COEF_B2_CTL] = 1,
++	[TAPAN_A_CDC_IIR2_COEF_B2_CTL] = 1,
++	[TAPAN_A_CDC_TOP_GAIN_UPDATE] = 1,
++	[TAPAN_A_CDC_COMP0_B1_CTL] = 1,
++	[TAPAN_A_CDC_COMP1_B1_CTL] = 1,
++	[TAPAN_A_CDC_COMP2_B1_CTL] = 1,
++	[TAPAN_A_CDC_COMP0_B2_CTL] = 1,
++	[TAPAN_A_CDC_COMP1_B2_CTL] = 1,
++	[TAPAN_A_CDC_COMP2_B2_CTL] = 1,
++	[TAPAN_A_CDC_COMP0_B3_CTL] = 1,
++	[TAPAN_A_CDC_COMP1_B3_CTL] = 1,
++	[TAPAN_A_CDC_COMP2_B3_CTL] = 1,
++	[TAPAN_A_CDC_COMP0_B4_CTL] = 1,
++	[TAPAN_A_CDC_COMP1_B4_CTL] = 1,
++	[TAPAN_A_CDC_COMP2_B4_CTL] = 1,
++	[TAPAN_A_CDC_COMP0_B5_CTL] = 1,
++	[TAPAN_A_CDC_COMP1_B5_CTL] = 1,
++	[TAPAN_A_CDC_COMP2_B5_CTL] = 1,
++	[TAPAN_A_CDC_COMP0_B6_CTL] = 1,
++	[TAPAN_A_CDC_COMP1_B6_CTL] = 1,
++	[TAPAN_A_CDC_COMP2_B6_CTL] = 1,
++	[TAPAN_A_CDC_COMP0_SHUT_DOWN_STATUS] = 1,
++	[TAPAN_A_CDC_COMP1_SHUT_DOWN_STATUS] = 1,
++	[TAPAN_A_CDC_COMP2_SHUT_DOWN_STATUS] = 1,
++	[TAPAN_A_CDC_COMP0_FS_CFG] = 1,
++	[TAPAN_A_CDC_COMP1_FS_CFG] = 1,
++	[TAPAN_A_CDC_COMP2_FS_CFG] = 1,
++	[TAPAN_A_CDC_CONN_RX1_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX1_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX1_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX2_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX2_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX2_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX3_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX3_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX4_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX4_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX4_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_ANC_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_ANC_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_B4_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ1_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ1_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ1_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ1_B4_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ2_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ2_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ2_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_EQ2_B4_CTL] = 1,
++	[TAPAN_A_CDC_CONN_SRC1_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_SRC1_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_SRC2_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_SRC2_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_SB_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_SB_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_SB_B3_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_SB_B4_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_SB_B5_CTL] = 1,
++	[TAPAN_A_CDC_CONN_TX_SB_B11_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX_SB_B1_CTL] = 1,
++	[TAPAN_A_CDC_CONN_RX_SB_B2_CTL] = 1,
++	[TAPAN_A_CDC_CONN_CLSH_CTL] = 1,
++	[TAPAN_A_CDC_CONN_MISC] = 1,
++	[TAPAN_A_CDC_MBHC_EN_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_FIR_B1_CFG] = 1,
++	[TAPAN_A_CDC_MBHC_FIR_B2_CFG] = 1,
++	[TAPAN_A_CDC_MBHC_TIMER_B1_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_TIMER_B2_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_TIMER_B3_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_TIMER_B4_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_TIMER_B5_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_TIMER_B6_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_B1_STATUS] = 1,
++	[TAPAN_A_CDC_MBHC_B2_STATUS] = 1,
++	[TAPAN_A_CDC_MBHC_B3_STATUS] = 1,
++	[TAPAN_A_CDC_MBHC_B4_STATUS] = 1,
++	[TAPAN_A_CDC_MBHC_B5_STATUS] = 1,
++	[TAPAN_A_CDC_MBHC_B1_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_B2_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B1_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B2_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B3_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B4_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B5_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B6_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B7_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B8_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B9_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B10_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B11_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_VOLT_B12_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_CLK_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_INT_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_DEBUG_CTL] = 1,
++	[TAPAN_A_CDC_MBHC_SPARE] = 1,
++};
+diff --git a/sound/soc/codecs/wcd9306.c b/sound/soc/codecs/wcd9306.c
+index 3ab35c744..594bb811d 100644
+--- a/sound/soc/codecs/wcd9306.c
++++ b/sound/soc/codecs/wcd9306.c
+@@ -1,131 +1,1708 @@
+-// SPDX-License-Identifier: GPL-2.0
++// SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * WCD9306 (tapan) audio codec over SLIMbus: esqueleto.
++ * Qualcomm WCD9306 (tapan) audio codec, SLIMbus interface.
+  *
+- * Por enquanto so enumera pelo barramento SLIMbus (manf 0x217, prod 0xe0,
+- * EA downstream 00 01 e0 00 17 02) e le o chip id para o dmesg.
+- * Sem caminho de audio, sem MBHC, sem supplies.
++ * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2026, Allan Siriani <allan@fatecpompeia.edu.br>
+  *
+- * Registradores (downstream LineageOS msm8226, wcd9306_registers.h):
+- *   TAPAN_A_CHIP_ID_BYTE_0..3 = 0x004..0x007.
+- * No MFD downstream (wcd9xxx-core.c) o minor vem de BYTE_0..1 e o major de
+- * BYTE_2..3, little endian. TAPAN_MAJOR = 0x0103 (core.h), ou seja
+- * BYTE_2 = 0x03 e BYTE_3 = 0x01 (o POR de BYTE_3 e 0x01).
+- * O downstream separa WCD9306 de WCD9302 por QFUSE, nao pelo chip id; aqui
+- * so logamos o valor, sem decidir a variante.
++ * Port of the speaker playback path of the msm-3.4 tapan driver
++ * (sound/soc/codecs/wcd9306.c, wcd9xxx-resmgr.c, drivers/mfd/wcd9xxx-core.c
++ * and wcd9xxx-slimslave.c) to the mainline SLIMbus/regmap/ASoC APIs, with
++ * the structure of the mainline wcd9335 driver.
+  *
+- * Acesso pelo SLIMbus: o downstream soma WCD9XXX_REGISTER_START_OFFSET
+- * (0x800) ao endereco do registrador (wcd9xxx_slim_read_device), igual ao
+- * "reg base 0x800" do wcd9335 mainline. Entao BYTE_0..3 = 0x804..0x807 no
+- * barramento.
++ * What is here:
++ *  - SLIMbus PGD (register access) and IFD (port configuration) devices;
++ *  - reset, static supplies (vdd-h, vdd-px, vdd-cx) and the codec bring-up;
++ *  - register defaults of the downstream driver;
++ *  - codec clock: external MCLK (9.6 MHz) or, without MCLK, the internal RC
++ *    oscillator (RCO), with the bandgap/clock-block sequences of wcd9xxx-resmgr;
++ *  - playback DAI "wcd9306_rx1" (AIF1 PB, SLIM RX1..RX5) with
++ *    set_channel_map/get_channel_map in the wcd9335 style;
++ *  - WCD9306/WCD9302 detection by QFUSE (tapan_check_wcd9306);
++ *  - SLIM RXn -> speaker interpolator (RX4 on the WCD9306, RX3 on the
++ *    WCD9302) -> class-D speaker driver (SPK_OUT);
++ *  - sidetone path AMIC1 -> ADC1 -> DEC1 -> IIR1 -> speaker interpolator (used
++ *    in calls), which also gives a source inside the codec to test the
++ *    speaker without the DSP.
+  *
+- * Sequencia (wcd9xxx_slim_probe downstream): supplies estaticas, reset
+- * (gpio 72: baixo 20 ms, alto 20 ms), endereco logico, leitura do chip id.
+- * Aqui: "reset-gpios" opcional no no do codec; as supplies ficam a cargo do
+- * DT (regulator-always-on em l4/l6), o esqueleto nao as liga.
++ * Not here (yet): headphone/earpiece/lineout, class-H, compander, ANC, MBHC,
++ * TX over SLIMbus, codec interrupts.
+  */
++#include <linux/clk.h>
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
++#include <linux/slab.h>
+ #include <linux/slimbus.h>
++#include <sound/pcm_params.h>
+ #include <sound/soc.h>
++#include <sound/soc-dapm.h>
++#include <sound/tlv.h>
+ 
+-#define WCD9306_SLIM_REG_BASE	0x800
+-#define WCD9306_CHIP_ID_BYTE_0	0x004
+-#define WCD9306_CHIP_ID_COUNT	4
+-#define WCD9306_CHIP_MAJOR	0x0103
+-#define WCD9306_LADDR_TRIES	10
++#include "wcd9306.h"
+ 
+-/* o reset so e pulsado uma vez, mesmo que o probe volte por EPROBE_DEFER */
+-static bool wcd9306_reset_done;
++#define WCD9306_SLIM_REG_BASE		0x800
+ 
+-static const struct snd_soc_component_driver wcd9306_component_drv = {
+-	.name = "wcd9306-codec",
++#define WCD9306_CHIP_MAJOR		0x0103
++#define WCD9306_LADDR_TRIES		10
++
++#define WCD9306_MCLK_9P6MHZ		9600000
++#define WCD9306_MCLK_12P288MHZ		12288000
++
++#define WCD9306_RATES (SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 | \
++		       SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_48000 | \
++		       SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_192000)
++#define WCD9306_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE)
++
++/* SLIMbus slave ports (wcd9xxx-slimslave.c, "taiko" slave type) */
++#define WCD9306_RX_PORT_START		16
++#define WCD9306_SLIM_RX_MULTI_CHAN(p)	(0x140 + 4 * (p))
++#define WCD9306_SLIM_RX_PORT_CFG(p)	(0x030 + (p))
++#define WCD9306_SLIM_PORT_INT_EN0	TAPAN_SLIM_PGD_PORT_INT_EN0
++#define WCD9306_SLIM_NUM_PORT_REG	3
++/* water mark 12 bytes, port enable */
++#define WCD9306_SLIM_WATER_MARK_VAL	((2 << 1) | 1)
++
++/* micbias: LDO_H 3.0 V (qcom,cdc-micbias-ldoh-v = 3) */
++#define WCD9306_LDOH_3P0_V		3
++#define WCD9306_LDOH_3P0_MAX_MV		2875
++
++enum {
++	AIF1_PB = 0,
++	NUM_CODEC_DAIS,
++};
++
++enum {
++	WCD9306_RX1 = 0,
++	WCD9306_RX2,
++	WCD9306_RX3,
++	WCD9306_RX4,
++	WCD9306_RX5,
++	WCD9306_RX_MAX,
++};
++
++enum wcd9306_clk_type {
++	WCD9306_CLK_OFF,
++	WCD9306_CLK_RCO,
++	WCD9306_CLK_MCLK,
++};
++
++static const char * const wcd9306_static_supplies[] = {
++	"vdd-h", "vdd-px", "vdd-cx",
++};
++
++struct wcd9306_slim_ch {
++	u32 ch_num;
++	u16 port;
++	u16 shift;
++	struct list_head list;
++};
++
++struct wcd9306_dai_data {
++	struct list_head slim_ch_list;
++	struct slim_stream_config sconfig;
++	struct slim_stream_runtime *sruntime;
+ };
+ 
+-static void wcd9306_read_chip_id(struct slim_device *sdev)
++struct wcd9306_priv {
++	struct device *dev;
++	struct slim_device *slim;
++	struct slim_device *slim_ifc_dev;
++	struct regmap *regmap;
++	struct regmap *if_regmap;
++	struct snd_soc_component *component;
++	struct gpio_desc *reset_gpio;
++	struct clk *mclk;
++	u32 mclk_rate;
++	struct regulator_bulk_data supplies[ARRAY_SIZE(wcd9306_static_supplies)];
++	bool supplies_on;
++	bool registered;
++	u8 version;
++	bool is_9302;		/* WCD9302: speaker on RX3 instead of RX4 */
++	u8 spk_int;		/* speaker interpolator index: 3 (RX4) or 2 (RX3) */
++
++	/* bandgap and clock block (wcd9xxx-resmgr), under clk_lock */
++	struct mutex clk_lock;
++	int bg_users;
++	int clk_rco_users;
++	int clk_mclk_users;
++	enum wcd9306_clk_type clk_type;
++	bool mclk_on;
++
++	int ldo_h_users;
++	int cfilt1_users;
++
++	struct wcd9306_slim_ch rx_chs[WCD9306_RX_MAX];
++	u32 rx_port_value[WCD9306_RX_MAX];
++	u32 num_rx_port;
++	struct wcd9306_dai_data dai[NUM_CODEC_DAIS];
++};
++
++static bool allow_rco = true;
++module_param(allow_rco, bool, 0644);
++MODULE_PARM_DESC(allow_rco,
++	"sem MCLK no DT, usar o oscilador RC interno do codec (so para teste)");
++
++/* ------------------------------------------------------------------------ */
++/* bandgap and codec clock (wcd9xxx-resmgr.c)                                */
++
++static void wcd9306_enable_bg(struct wcd9306_priv *wcd)
+ {
+-	struct device *dev = &sdev->dev;
+-	u8 id[WCD9306_CHIP_ID_COUNT];
+-	u16 major, minor;
+-	int i, val;
++	struct regmap *rm = wcd->regmap;
++
++	/* bandgap in slow mode with precharge */
++	regmap_update_bits(rm, TAPAN_A_BIAS_CENTRAL_BG_CTL, 0x80, 0x80);
++	regmap_update_bits(rm, TAPAN_A_BIAS_CENTRAL_BG_CTL, 0x04, 0x04);
++	regmap_update_bits(rm, TAPAN_A_BIAS_CENTRAL_BG_CTL, 0x01, 0x01);
++	usleep_range(1000, 1100);
++	regmap_update_bits(rm, TAPAN_A_BIAS_CENTRAL_BG_CTL, 0x80, 0x00);
++}
+ 
+-	for (i = 0; i < WCD9306_CHIP_ID_COUNT; i++) {
+-		u32 reg = WCD9306_CHIP_ID_BYTE_0 + i;
++static void wcd9306_disable_bg(struct wcd9306_priv *wcd)
++{
++	regmap_update_bits(wcd->regmap, TAPAN_A_BIAS_CENTRAL_BG_CTL, 0x03, 0x00);
++	usleep_range(100, 110);
++}
++
++static void wcd9306_get_bandgap(struct wcd9306_priv *wcd)
++{
++	lockdep_assert_held(&wcd->clk_lock);
++	if (++wcd->bg_users == 1)
++		wcd9306_enable_bg(wcd);
++}
++
++static void wcd9306_put_bandgap(struct wcd9306_priv *wcd)
++{
++	lockdep_assert_held(&wcd->clk_lock);
++	if (WARN_ON(wcd->bg_users <= 0))
++		return;
++	if (--wcd->bg_users == 0)
++		wcd9306_disable_bg(wcd);
++}
++
++static void wcd9306_rco_config_mode(struct wcd9306_priv *wcd, bool enable)
++{
++	struct regmap *rm = wcd->regmap;
++
++	if (enable) {
++		regmap_update_bits(rm, TAPAN_A_RC_OSC_FREQ, 0x10, 0x00);
++		/* bandgap mode to fast */
++		regmap_write(rm, TAPAN_A_BIAS_OSC_BG_CTL, 0x17);
++		usleep_range(5, 10);
++		regmap_update_bits(rm, TAPAN_A_RC_OSC_FREQ, 0x80, 0x80);
++		regmap_update_bits(rm, TAPAN_A_RC_OSC_TEST, 0x80, 0x80);
++		usleep_range(10, 20);
++		regmap_update_bits(rm, TAPAN_A_RC_OSC_TEST, 0x80, 0x00);
++		usleep_range(10000, 10100);
++		regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN1, 0x08, 0x08);
++	} else {
++		regmap_update_bits(rm, TAPAN_A_BIAS_OSC_BG_CTL, 0x01, 0x00);
++		regmap_update_bits(rm, TAPAN_A_RC_OSC_FREQ, 0x80, 0x00);
++	}
++}
++
++static void wcd9306_enable_clock_block(struct wcd9306_priv *wcd, bool rco)
++{
++	struct regmap *rm = wcd->regmap;
++	unsigned int val = 0;
++
++	if (rco) {
++		wcd9306_rco_config_mode(wcd, true);
++		regmap_write(rm, TAPAN_A_CLK_BUFF_EN2, 0x02);
++		usleep_range(1000, 1100);
++	} else {
++		/* switch to MCLK */
++		regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN1, 0x08, 0x00);
++		regmap_read(rm, TAPAN_A_RC_OSC_FREQ, &val);
++		if (val & 0x80) {
++			regmap_write(rm, TAPAN_A_CLK_BUFF_EN2, 0x02);
++			wcd9306_rco_config_mode(wcd, false);
++		}
++		/* clock source to external clock, clock buffer ref to VBG */
++		regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN1, 0x0c, 0x04);
++	}
++
++	regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN1, 0x01, 0x01);
++	/* the clock buffer needs 1 ms to start */
++	usleep_range(1000, 1200);
++	regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN2, 0x02, 0x00);
++	regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN2, 0x04, 0x04);
++	regmap_update_bits(rm, TAPAN_A_CDC_CLK_MCLK_CTL, 0x01, 0x01);
++	usleep_range(50, 100);
++}
++
++static void wcd9306_disable_clock_block(struct wcd9306_priv *wcd)
++{
++	struct regmap *rm = wcd->regmap;
++
++	regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN2, 0x04, 0x00);
++	usleep_range(50, 100);
++	regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN2, 0x02, 0x02);
++	regmap_update_bits(rm, TAPAN_A_CLK_BUFF_EN1, 0x05, 0x00);
++	usleep_range(50, 100);
++	if (wcd->clk_type == WCD9306_CLK_RCO)
++		wcd9306_rco_config_mode(wcd, false);
++}
++
++static void wcd9306_get_clk_block(struct wcd9306_priv *wcd,
++				  enum wcd9306_clk_type type)
++{
++	lockdep_assert_held(&wcd->clk_lock);
+ 
+-		val = slim_readb(sdev, WCD9306_SLIM_REG_BASE + reg);
+-		if (val < 0) {
+-			dev_err(dev, "leitura 0x%03x (slim 0x%03x) falhou: %d\n",
+-				reg, WCD9306_SLIM_REG_BASE + reg, val);
++	if (type == WCD9306_CLK_RCO) {
++		if (++wcd->clk_rco_users == 1 &&
++		    wcd->clk_type == WCD9306_CLK_OFF) {
++			wcd9306_enable_clock_block(wcd, true);
++			wcd->clk_type = WCD9306_CLK_RCO;
++		}
++		return;
++	}
++
++	if (++wcd->clk_mclk_users == 1) {
++		if (wcd->clk_type == WCD9306_CLK_RCO)
++			wcd9306_disable_clock_block(wcd);
++		wcd9306_enable_clock_block(wcd, false);
++		wcd->clk_type = WCD9306_CLK_MCLK;
++	}
++}
++
++static void wcd9306_put_clk_block(struct wcd9306_priv *wcd,
++				  enum wcd9306_clk_type type)
++{
++	lockdep_assert_held(&wcd->clk_lock);
++
++	if (type == WCD9306_CLK_RCO) {
++		if (WARN_ON(wcd->clk_rco_users <= 0))
++			return;
++		wcd->clk_rco_users--;
++	} else {
++		if (WARN_ON(wcd->clk_mclk_users <= 0))
+ 			return;
++		wcd->clk_mclk_users--;
++	}
++
++	if (wcd->clk_type == WCD9306_CLK_MCLK && !wcd->clk_mclk_users) {
++		wcd9306_disable_clock_block(wcd);
++		wcd->clk_type = WCD9306_CLK_OFF;
++		if (wcd->clk_rco_users) {
++			wcd9306_enable_clock_block(wcd, true);
++			wcd->clk_type = WCD9306_CLK_RCO;
+ 		}
+-		id[i] = val;
+-		dev_info(dev, "chip id reg 0x%03x = 0x%02x\n", reg, val);
++	} else if (wcd->clk_type == WCD9306_CLK_RCO && !wcd->clk_rco_users) {
++		wcd9306_disable_clock_block(wcd);
++		wcd->clk_type = WCD9306_CLK_OFF;
+ 	}
++}
+ 
+-	minor = id[0] | (id[1] << 8);
+-	major = id[2] | (id[3] << 8);
+-	dev_info(dev, "chip id major 0x%04x minor 0x%04x\n", major, minor);
+-	if (major != WCD9306_CHIP_MAJOR)
+-		dev_warn(dev, "chip major 0x%04x, esperado 0x%04x (tapan)\n",
+-			 major, WCD9306_CHIP_MAJOR);
++/* audio clock: MCLK when the DT gives one, RCO otherwise (test only) */
++static int wcd9306_audio_clk_enable(struct wcd9306_priv *wcd, bool enable)
++{
++	enum wcd9306_clk_type type;
++	int ret = 0;
++
++	if (wcd->mclk)
++		type = WCD9306_CLK_MCLK;
++	else if (allow_rco)
++		type = WCD9306_CLK_RCO;
++	else
++		return -ENODEV;
++
++	mutex_lock(&wcd->clk_lock);
++	if (enable) {
++		if (wcd->mclk) {
++			ret = clk_prepare_enable(wcd->mclk);
++			if (ret) {
++				dev_err(wcd->dev, "mclk: %d\n", ret);
++				goto out;
++			}
++		}
++		wcd9306_get_bandgap(wcd);
++		wcd9306_get_clk_block(wcd, type);
++	} else {
++		wcd9306_put_clk_block(wcd, type);
++		wcd9306_put_bandgap(wcd);
++		if (wcd->mclk)
++			clk_disable_unprepare(wcd->mclk);
++	}
++out:
++	mutex_unlock(&wcd->clk_lock);
++	return ret;
+ }
+ 
+-static int wcd9306_slim_status(struct slim_device *sdev,
+-			       enum slim_device_status status)
++/* ------------------------------------------------------------------------ */
++/* register defaults (tapan_reg_defaults, tapan_codec_reg_init_val)         */
++
++struct wcd9306_reg_mask_val {
++	u16 reg;
++	u8 mask;
++	u8 val;
++};
++
++static const struct wcd9306_reg_mask_val wcd9306_2_x_reg_reset_values[] = {
++	{ TAPAN_A_TX_7_MBHC_EN, 0xff, 0x6c },
++	{ TAPAN_A_BUCK_CTRL_CCL_4, 0xff, 0x51 },
++	{ TAPAN_A_RX_HPH_CNP_WG_CTL, 0xff, 0xda },
++	{ TAPAN_A_RX_EAR_CNP, 0xff, 0xc0 },
++	{ TAPAN_A_RX_LINE_1_TEST, 0xff, 0x02 },
++	{ TAPAN_A_RX_LINE_2_TEST, 0xff, 0x02 },
++	{ TAPAN_A_SPKR_DRV_OCP_CTL, 0xff, 0x97 },
++	{ TAPAN_A_SPKR_DRV_CLIP_DET, 0xff, 0x01 },
++	{ TAPAN_A_SPKR_DRV_IEC, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_B1_CTL, 0xff, 0xe4 },
++	{ TAPAN_A_CDC_CLSH_B2_CTL, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_B3_CTL, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_BUCK_NCP_VARS, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_V_PA_HD_EAR, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_V_PA_HD_HPH, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_V_PA_MIN_EAR, 0xff, 0x00 },
++	{ TAPAN_A_CDC_CLSH_V_PA_MIN_HPH, 0xff, 0x00 },
++};
++
++static const struct wcd9306_reg_mask_val wcd9306_reg_defaults[] = {
++	/* enable QFUSE for wcd9306 */
++	{ TAPAN_A_QFUSE_CTL, 0xff, 0x03 },
++	/* PROGRAM_THE_0P85V_VBG_REFERENCE = V_0P858V */
++	{ TAPAN_A_BIAS_CURR_CTL_2, 0xff, 0x04 },
++	{ TAPAN_A_CDC_CLK_POWER_CTL, 0xff, 0x03 },
++	/* EAR PA defaults */
++	{ TAPAN_A_RX_EAR_CMBUFF, 0xff, 0x05 },
++	/* RX1 and RX2 defaults */
++	{ TAPAN_A_CDC_RX1_B6_CTL, 0xff, 0xa0 },
++	{ TAPAN_A_CDC_RX2_B6_CTL, 0xff, 0xa0 },
++	/* headset right from RX2 */
++	{ TAPAN_A_CDC_CONN_RX2_B2_CTL, 0xff, 0x10 },
++	/* class-H defaults (borrowed from taiko) */
++	{ TAPAN_A_RX_HPH_CHOP_CTL, 0xff, 0xf4 },
++	{ TAPAN_A_BIAS_CURR_CTL_2, 0xff, 0x08 },
++	{ TAPAN_A_BUCK_CTRL_CCL_1, 0xff, 0x5b },
++	{ TAPAN_A_BUCK_CTRL_CCL_3, 0xff, 0x6f },
++	{ TAPAN_A_BIAS_CURR_CTL_2, 0xff, 0x04 },
++	{ TAPAN_A_RX_HPH_CHOP_CTL, 0xff, 0x74 },
++	{ TAPAN_A_RX_BUCK_BIAS1, 0xff, 0x62 },
++	/* max non-overlap time for NCP */
++	{ TAPAN_A_NCP_CLK, 0xff, 0xfc },
++	/* 25 mV/50 mV deltap/m to reduce ripple */
++	{ TAPAN_A_BUCK_CTRL_VCL_1, 0xff, 0x08 },
++	/* DISABLE_MODE_SEL = 0b10 (no PWM in auto mode) */
++	{ TAPAN_A_BUCK_MODE_3, 0xff, 0xce },
++	/* HPH, EAR and LINE DAC bias to 70 % */
++	{ TAPAN_A_RX_HPH_BIAS_PA, 0xff, 0x7a },
++	{ TAPAN_A_RX_EAR_BIAS_PA, 0xff, 0x76 },
++	{ TAPAN_A_RX_LINE_BIAS_PA, 0xff, 0x78 },
++	/* stop micbias leakage through the insertion detection diode */
++	{ TAPAN_A_MICB_2_MBHC, 0xff, 0x41 },
++	/* vdd_buck may switch between 1.8 V and 2.15 V */
++	{ TAPAN_A_BUCK_MODE_2, 0xff, 0xaa },
++};
++
++static const struct wcd9306_reg_mask_val wcd9306_1_0_reg_defaults[] = {
++	/* close leakage on the speaker driver */
++	{ TAPAN_A_SPKR_DRV_DBG_PWRSTG, 0xff, 0x24 },
++	{ TAPAN_A_SPKR_DRV_DBG_DAC, 0xff, 0xe5 },
++};
++
++static const struct wcd9306_reg_mask_val wcd9306_codec_reg_init_val[] = {
++	/* current threshold 365 mA, 4096 wait and run cycles */
++	{ TAPAN_A_RX_HPH_OCP_CTL, 0xe9, 0x69 },
++	{ TAPAN_A_RX_COM_OCP_COUNT, 0xff, 0xff },
++	{ TAPAN_A_RX_HPH_L_TEST, 0x01, 0x01 },
++	{ TAPAN_A_RX_HPH_R_TEST, 0x01, 0x01 },
++	/* gain registers use register gain */
++	{ TAPAN_A_RX_HPH_L_GAIN, 0x20, 0x20 },
++	{ TAPAN_A_RX_HPH_R_GAIN, 0x20, 0x20 },
++	{ TAPAN_A_RX_LINE_1_GAIN, 0x20, 0x20 },
++	{ TAPAN_A_RX_LINE_2_GAIN, 0x20, 0x20 },
++	{ TAPAN_A_SPKR_DRV_GAIN, 0x04, 0x04 },
++	/* RDAC5 from DEM3_INV: LO1/LO2 differential */
++	{ TAPAN_A_CDC_CONN_MISC, 0x04, 0x04 },
++	/* class-H config */
++	{ TAPAN_A_CDC_CONN_CLSH_CTL, 0x3c, 0x14 },
++	/* 16 bit samples on TX1..TX5 */
++	{ TAPAN_A_CDC_CONN_TX_SB_B1_CTL, 0x30, 0x20 },
++	{ TAPAN_A_CDC_CONN_TX_SB_B2_CTL, 0x30, 0x20 },
++	{ TAPAN_A_CDC_CONN_TX_SB_B3_CTL, 0x30, 0x20 },
++	{ TAPAN_A_CDC_CONN_TX_SB_B4_CTL, 0x30, 0x20 },
++	{ TAPAN_A_CDC_CONN_TX_SB_B5_CTL, 0x30, 0x20 },
++	/* speaker DAC switch off */
++	{ TAPAN_A_SPKR_DRV_DAC_CTL, 0x04, 0x00 },
++	/* 16 bit samples on RX */
++	{ TAPAN_A_CDC_CONN_RX_SB_B1_CTL, 0xff, 0xaa },
++	{ TAPAN_A_CDC_CONN_RX_SB_B2_CTL, 0xff, 0x2a },
++	/* HPF on the TX paths */
++	{ TAPAN_A_CDC_TX1_MUX_CTL, 0x08, 0x00 },
++	{ TAPAN_A_CDC_TX2_MUX_CTL, 0x08, 0x00 },
++	{ TAPAN_A_CDC_TX3_MUX_CTL, 0x08, 0x00 },
++	{ TAPAN_A_CDC_TX4_MUX_CTL, 0x08, 0x00 },
++	/* compander zone selection */
++	{ TAPAN_A_CDC_COMP0_B4_CTL, 0x3f, 0x37 },
++	{ TAPAN_A_CDC_COMP1_B4_CTL, 0x3f, 0x37 },
++	{ TAPAN_A_CDC_COMP2_B4_CTL, 0x3f, 0x37 },
++	{ TAPAN_A_CDC_COMP0_B5_CTL, 0x7f, 0x7f },
++	{ TAPAN_A_CDC_COMP1_B5_CTL, 0x7f, 0x7f },
++	{ TAPAN_A_CDC_COMP2_B5_CTL, 0x7f, 0x7f },
++	/* wavegen timer 20 ms, chopper off (compander off) */
++	{ TAPAN_A_RX_HPH_CNP_WG_CTL, 0xff, 0xdb },
++	{ TAPAN_A_RX_HPH_CNP_WG_TIME, 0xff, 0x58 },
++	{ TAPAN_A_RX_HPH_BIAS_WG_OCP, 0xff, 0x1a },
++	{ TAPAN_A_RX_HPH_CHOP_CTL, 0xff, 0x24 },
++};
++
++static void wcd9306_apply(struct regmap *rm,
++			  const struct wcd9306_reg_mask_val *t, int n)
+ {
+-	dev_info(&sdev->dev, "status SLIMbus %s, LA 0x%x\n",
+-		 status == SLIM_DEVICE_STATUS_UP ? "UP" : "DOWN", sdev->laddr);
+-	if (status == SLIM_DEVICE_STATUS_UP)
+-		wcd9306_read_chip_id(sdev);
++	int i;
+ 
++	for (i = 0; i < n; i++) {
++		if (t[i].mask == 0xff)
++			regmap_write(rm, t[i].reg, t[i].val);
++		else
++			regmap_update_bits(rm, t[i].reg, t[i].mask, t[i].val);
++	}
++}
++
++/* cfilt k value for a voltage, LDO_H at 3.0 V (wcd9xxx_resmgr_get_k_val) */
++static int wcd9306_cfilt_k(unsigned int mv)
++{
++	unsigned int k;
++
++	for (k = 4; k <= 44; k++)
++		if (WCD9306_LDOH_3P0_MAX_MV * k / 44 >= mv)
++			return k - 4;
+ 	return 0;
+ }
+ 
+-static int wcd9306_slim_probe(struct slim_device *sdev)
++static void wcd9306_codec_init(struct wcd9306_priv *wcd)
+ {
+-	struct device *dev = &sdev->dev;
+-	struct gpio_desc *reset;
+-	int i, ret = -ENXIO;
++	struct regmap *rm = wcd->regmap;
++	int i;
+ 
+-	reset = devm_gpiod_get_optional(dev, "reset", GPIOD_ASIS);
+-	if (IS_ERR(reset))
+-		return dev_err_probe(dev, PTR_ERR(reset), "reset-gpios\n");
++	if (wcd->version != 0)
++		wcd9306_apply(rm, wcd9306_2_x_reg_reset_values,
++			      ARRAY_SIZE(wcd9306_2_x_reg_reset_values));
++	wcd9306_apply(rm, wcd9306_reg_defaults,
++		      ARRAY_SIZE(wcd9306_reg_defaults));
++	if (wcd->version == 0)
++		wcd9306_apply(rm, wcd9306_1_0_reg_defaults,
++			      ARRAY_SIZE(wcd9306_1_0_reg_defaults));
+ 
+-	if (reset && !wcd9306_reset_done) {
+-		/* reset-gpios e ativo baixo: 1 = em reset */
+-		gpiod_direction_output(reset, 1);
+-		msleep(20);
+-		gpiod_set_value_cansleep(reset, 0);
+-		msleep(20);
+-		wcd9306_reset_done = true;
+-		dev_info(dev, "reset do codec pulsado\n");
+-	} else if (!reset) {
+-		dev_info(dev, "sem reset-gpios: codec precisa ja estar fora de reset\n");
++	/* MCLK rate (tapan_update_reg_mclk_rate) */
++	if (wcd->mclk_rate == WCD9306_MCLK_12P288MHZ) {
++		regmap_update_bits(rm, TAPAN_A_CHIP_CTL, 0x06, 0x00);
++		regmap_update_bits(rm, TAPAN_A_RX_COM_TIMER_DIV, 0x01, 0x01);
++	} else {
++		regmap_update_bits(rm, TAPAN_A_CHIP_CTL, 0x06, 0x02);
++	}
++
++	wcd9306_apply(rm, wcd9306_codec_reg_init_val,
++		      ARRAY_SIZE(wcd9306_codec_reg_init_val));
++
++	/*
++	 * micbias (DT of the falcon): LDO_H 3.0 V, cfilt1/2/3 = 1800/2700/1800
++	 * mV, micbias1 on cfilt1 with external bypass capacitor.
++	 */
++	regmap_update_bits(rm, TAPAN_A_LDO_H_MODE_1, 0x0c,
++			   WCD9306_LDOH_3P0_V << 2);
++	regmap_update_bits(rm, TAPAN_A_MICB_CFILT_1_VAL, 0xfc,
++			   wcd9306_cfilt_k(1800) << 2);
++	regmap_update_bits(rm, TAPAN_A_MICB_CFILT_2_VAL, 0xfc,
++			   wcd9306_cfilt_k(2700) << 2);
++	regmap_update_bits(rm, TAPAN_A_MICB_CFILT_3_VAL, 0xfc,
++			   wcd9306_cfilt_k(1800) << 2);
++	regmap_update_bits(rm, TAPAN_A_MICB_1_CTL, 0x10, 0x00);
++	regmap_update_bits(rm, TAPAN_A_MICB_2_CTL, 0x10, 0x10);
++	regmap_update_bits(rm, TAPAN_A_MICB_3_CTL, 0x10, 0x10);
++
++	/* SLIMbus port interrupts on the interface device */
++	for (i = 0; i < WCD9306_SLIM_NUM_PORT_REG; i++)
++		regmap_write(wcd->if_regmap, WCD9306_SLIM_PORT_INT_EN0 + i, 0xff);
++}
++
++/* ------------------------------------------------------------------------ */
++/* DAPM events                                                               */
++
++static int wcd9306_codec_enable_mclk(struct snd_soc_dapm_widget *w,
++				     struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		return wcd9306_audio_clk_enable(wcd, true);
++	case SND_SOC_DAPM_POST_PMD:
++		return wcd9306_audio_clk_enable(wcd, false);
++	}
++	return 0;
++}
++
++static int wcd9306_codec_enable_interpolator(struct snd_soc_dapm_widget *w,
++					     struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++	unsigned int gain_reg = TAPAN_A_CDC_RX1_VOL_CTL_B2_CTL + 8 * w->shift;
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_CLK_RX_RESET_CTL,
++					      1 << w->shift, 1 << w->shift);
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_CLK_RX_RESET_CTL,
++					      1 << w->shift, 0);
++		break;
++	case SND_SOC_DAPM_POST_PMU:
++		/* apply the digital gain after the interpolator is enabled */
++		snd_soc_component_write(comp, gain_reg,
++					snd_soc_component_read(comp, gain_reg));
++		break;
++	}
++	return 0;
++}
++
++static int wcd9306_codec_enable_spk_pa(struct snd_soc_dapm_widget *w,
++				       struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		snd_soc_component_update_bits(comp, TAPAN_A_SPKR_DRV_EN,
++					      0x80, 0x80);
++		break;
++	case SND_SOC_DAPM_POST_PMD:
++		snd_soc_component_update_bits(comp, TAPAN_A_SPKR_DRV_EN,
++					      0x80, 0x00);
++		break;
++	}
++	return 0;
++}
++
++static int wcd9306_codec_enable_vdd_spkr(struct snd_soc_dapm_widget *w,
++					 struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++
++	/* tapan 1.0 only: leakage on the speaker driver power stage */
++	if (wcd->version != 0)
++		return 0;
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		snd_soc_component_update_bits(comp, TAPAN_A_SPKR_DRV_DBG_PWRSTG,
++					      0x24, 0x00);
++		break;
++	case SND_SOC_DAPM_POST_PMD:
++		snd_soc_component_update_bits(comp, TAPAN_A_SPKR_DRV_DBG_PWRSTG,
++					      0x24, 0x24);
++		break;
++	}
++	return 0;
++}
++
++static int wcd9306_codec_enable_ldo_h(struct snd_soc_dapm_widget *w,
++				      struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		if (++wcd->ldo_h_users == 1) {
++			mutex_lock(&wcd->clk_lock);
++			wcd9306_get_bandgap(wcd);
++			wcd9306_get_clk_block(wcd, WCD9306_CLK_RCO);
++			snd_soc_component_update_bits(comp, TAPAN_A_LDO_H_MODE_1,
++						      0x80, 0x80);
++			wcd9306_put_clk_block(wcd, WCD9306_CLK_RCO);
++			mutex_unlock(&wcd->clk_lock);
++			/* LDO needs 1 ms to settle */
++			usleep_range(1000, 1100);
++		}
++		break;
++	case SND_SOC_DAPM_POST_PMD:
++		if (--wcd->ldo_h_users == 0) {
++			mutex_lock(&wcd->clk_lock);
++			wcd9306_get_clk_block(wcd, WCD9306_CLK_RCO);
++			snd_soc_component_update_bits(comp, TAPAN_A_LDO_H_MODE_1,
++						      0x80, 0x00);
++			wcd9306_put_clk_block(wcd, WCD9306_CLK_RCO);
++			wcd9306_put_bandgap(wcd);
++			mutex_unlock(&wcd->clk_lock);
++		}
++		break;
++	}
++	return 0;
++}
++
++/* MIC BIAS1 External: cfilt1, external bypass capacitor */
++static int wcd9306_codec_enable_micbias1(struct snd_soc_dapm_widget *w,
++					 struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		if (wcd->cfilt1_users++ == 0)
++			snd_soc_component_update_bits(comp,
++						      TAPAN_A_MICB_CFILT_1_CTL,
++						      0x80, 0x80);
++		snd_soc_component_update_bits(comp, TAPAN_A_MICB_1_CTL,
++					      0x80, 0x80);
++		break;
++	case SND_SOC_DAPM_POST_PMU:
++		usleep_range(20000, 20100);
++		break;
++	case SND_SOC_DAPM_POST_PMD:
++		snd_soc_component_update_bits(comp, TAPAN_A_MICB_1_CTL,
++					      0x80, 0x00);
++		if (--wcd->cfilt1_users == 0)
++			snd_soc_component_update_bits(comp,
++						      TAPAN_A_MICB_CFILT_1_CTL,
++						      0x80, 0x00);
++		break;
++	}
++	return 0;
++}
++
++static int wcd9306_codec_enable_adc1(struct snd_soc_dapm_widget *w,
++				     struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++
++	/* ADC1 init bit is TX_1_2_TEST_CTL[7] */
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		snd_soc_component_update_bits(comp, TAPAN_A_TX_1_2_TEST_CTL,
++					      0x80, 0x80);
++		break;
++	case SND_SOC_DAPM_POST_PMU:
++		snd_soc_component_update_bits(comp, TAPAN_A_TX_1_2_TEST_CTL,
++					      0x80, 0x00);
++		break;
++	}
++	return 0;
++}
++
++static int wcd9306_codec_enable_dec1(struct snd_soc_dapm_widget *w,
++				     struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++
++	switch (event) {
++	case SND_SOC_DAPM_PRE_PMU:
++		/* TX digital mute while the decimator starts */
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_TX1_VOL_CTL_CFG,
++					      0x01, 0x01);
++		snd_soc_component_update_bits(comp,
++					      TAPAN_A_CDC_CLK_TX_RESET_B1_CTL,
++					      0x01, 0x01);
++		snd_soc_component_update_bits(comp,
++					      TAPAN_A_CDC_CLK_TX_RESET_B1_CTL,
++					      0x01, 0x00);
++		/* HPF at 150 Hz, enabled */
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_TX1_MUX_CTL,
++					      0x30, 0x20);
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_TX1_MUX_CTL,
++					      0x08, 0x00);
++		break;
++	case SND_SOC_DAPM_POST_PMU:
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_TX1_VOL_CTL_CFG,
++					      0x01, 0x00);
++		snd_soc_component_write(comp, TAPAN_A_CDC_TX1_VOL_CTL_GAIN,
++			snd_soc_component_read(comp,
++					       TAPAN_A_CDC_TX1_VOL_CTL_GAIN));
++		break;
++	case SND_SOC_DAPM_PRE_PMD:
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_TX1_VOL_CTL_CFG,
++					      0x01, 0x01);
++		break;
++	case SND_SOC_DAPM_POST_PMD:
++		snd_soc_component_update_bits(comp, TAPAN_A_CDC_TX1_MUX_CTL,
++					      0x08, 0x08);
++		break;
++	}
++	return 0;
++}
++
++/* AIF1 PB: SLIMbus RX ports on the interface device */
++static int wcd9306_codec_enable_slim(struct snd_soc_dapm_widget *w,
++				     struct snd_kcontrol *kc, int event)
++{
++	struct snd_soc_component *comp = snd_soc_dapm_to_component(w->dapm);
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++	struct wcd9306_dai_data *dai = &wcd->dai[w->shift];
++	struct wcd9306_slim_ch *ch;
++
++	if (event != SND_SOC_DAPM_POST_PMD)
++		return 0;
++
++	/* port disable; slim_stream_disable already took the channels down */
++	list_for_each_entry(ch, &dai->slim_ch_list, list)
++		regmap_write(wcd->if_regmap,
++			     WCD9306_SLIM_RX_PORT_CFG(ch->port), 0x00);
++	return 0;
++}
++
++/* ------------------------------------------------------------------------ */
++/* controls                                                                  */
++
++static const DECLARE_TLV_DB_SCALE(digital_gain, 0, 1, 0);
++static const DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1);
++static const DECLARE_TLV_DB_SCALE(analog_gain, 0, 25, 1);
++
++static const char * const rx_3_4_mix1_text[] = {
++	"ZERO", "SRC1", "SRC2", "IIR1", "IIR2", "RX1", "RX2", "RX3", "RX4",
++	"RX5", "AUXRX", "AUXTX1", "AUXTX2",
++};
++
++static const char * const rx_mix2_text[] = {
++	"ZERO", "SRC1", "SRC2", "IIR1", "IIR2",
++};
++
++static const char * const dec_1_2_mux_text[] = {
++	"ZERO", "ADC1", "ADC2", "ADC3", "ADC4", "ADCMB",
++	"DMIC1", "DMIC2", "DMIC3", "DMIC4",
++};
++
++static const char * const iir1_inp1_text[] = {
++	"ZERO", "DEC1", "DEC2", "DEC3", "DEC4",
++	"RX1", "RX2", "RX3", "RX4", "RX5",
++};
++
++static const char * const slim_rx_mux_text[] = {
++	"ZERO", "AIF1_PB",
++};
++
++static SOC_ENUM_SINGLE_DECL(rx4_mix1_inp1_enum, TAPAN_A_CDC_CONN_RX4_B1_CTL,
++			    0, rx_3_4_mix1_text);
++static SOC_ENUM_SINGLE_DECL(rx4_mix1_inp2_enum, TAPAN_A_CDC_CONN_RX4_B1_CTL,
++			    4, rx_3_4_mix1_text);
++static SOC_ENUM_SINGLE_DECL(rx3_mix1_inp1_enum, TAPAN_A_CDC_CONN_RX3_B1_CTL,
++			    0, rx_3_4_mix1_text);
++static SOC_ENUM_SINGLE_DECL(rx3_mix1_inp2_enum, TAPAN_A_CDC_CONN_RX3_B1_CTL,
++			    4, rx_3_4_mix1_text);
++static SOC_ENUM_SINGLE_DECL(rx4_mix2_inp1_enum, TAPAN_A_CDC_CONN_RX4_B3_CTL,
++			    0, rx_mix2_text);
++static SOC_ENUM_SINGLE_DECL(dec1_mux_enum, TAPAN_A_CDC_CONN_TX_B1_CTL,
++			    0, dec_1_2_mux_text);
++static SOC_ENUM_SINGLE_DECL(iir1_inp1_mux_enum, TAPAN_A_CDC_CONN_EQ1_B1_CTL,
++			    0, iir1_inp1_text);
++static SOC_ENUM_SINGLE_EXT_DECL(slim_rx_mux_enum, slim_rx_mux_text);
++
++static const struct snd_kcontrol_new rx4_mix1_inp1_mux =
++	SOC_DAPM_ENUM("RX4 MIX1 INP1 Mux", rx4_mix1_inp1_enum);
++static const struct snd_kcontrol_new rx4_mix1_inp2_mux =
++	SOC_DAPM_ENUM("RX4 MIX1 INP2 Mux", rx4_mix1_inp2_enum);
++static const struct snd_kcontrol_new rx3_mix1_inp1_mux =
++	SOC_DAPM_ENUM("RX3 MIX1 INP1 Mux", rx3_mix1_inp1_enum);
++static const struct snd_kcontrol_new rx3_mix1_inp2_mux =
++	SOC_DAPM_ENUM("RX3 MIX1 INP2 Mux", rx3_mix1_inp2_enum);
++static const struct snd_kcontrol_new rx4_mix2_inp1_mux =
++	SOC_DAPM_ENUM("RX4 MIX2 INP1 Mux", rx4_mix2_inp1_enum);
++static const struct snd_kcontrol_new dec1_mux =
++	SOC_DAPM_ENUM("DEC1 MUX Mux", dec1_mux_enum);
++static const struct snd_kcontrol_new iir1_inp1_mux =
++	SOC_DAPM_ENUM("IIR1 INP1 Mux", iir1_inp1_mux_enum);
++
++static const struct snd_kcontrol_new spk_dac_switch[] = {
++	SOC_DAPM_SINGLE("Switch", TAPAN_A_SPKR_DRV_DAC_CTL, 2, 1, 0),
++};
++
++static int slim_rx_mux_get(struct snd_kcontrol *kc,
++			   struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_dapm_widget *w = snd_soc_dapm_kcontrol_widget(kc);
++	struct wcd9306_priv *wcd = dev_get_drvdata(w->dapm->dev);
++
++	ucontrol->value.enumerated.item[0] = wcd->rx_port_value[w->shift];
++	return 0;
++}
++
++static int slim_rx_mux_put(struct snd_kcontrol *kc,
++			   struct snd_ctl_elem_value *ucontrol)
++{
++	struct snd_soc_dapm_widget *w = snd_soc_dapm_kcontrol_widget(kc);
++	struct wcd9306_priv *wcd = dev_get_drvdata(w->dapm->dev);
++	struct soc_enum *e = (struct soc_enum *)kc->private_value;
++	u32 port_id = w->shift;
++	u32 val = ucontrol->value.enumerated.item[0];
++
++	if (val >= ARRAY_SIZE(slim_rx_mux_text))
++		return -EINVAL;
++	if (wcd->rx_port_value[port_id] == val)
++		return 0;
++
++	wcd->rx_port_value[port_id] = val;
++	list_del_init(&wcd->rx_chs[port_id].list);
++	if (val == 1)
++		list_add_tail(&wcd->rx_chs[port_id].list,
++			      &wcd->dai[AIF1_PB].slim_ch_list);
++
++	snd_soc_dapm_mux_update_power(w->dapm, kc, val, e, NULL);
++	return 1;
++}
++
++static const struct snd_kcontrol_new slim_rx_mux[WCD9306_RX_MAX] = {
++	SOC_DAPM_ENUM_EXT("SLIM RX1 Mux", slim_rx_mux_enum,
++			  slim_rx_mux_get, slim_rx_mux_put),
++	SOC_DAPM_ENUM_EXT("SLIM RX2 Mux", slim_rx_mux_enum,
++			  slim_rx_mux_get, slim_rx_mux_put),
++	SOC_DAPM_ENUM_EXT("SLIM RX3 Mux", slim_rx_mux_enum,
++			  slim_rx_mux_get, slim_rx_mux_put),
++	SOC_DAPM_ENUM_EXT("SLIM RX4 Mux", slim_rx_mux_enum,
++			  slim_rx_mux_get, slim_rx_mux_put),
++	SOC_DAPM_ENUM_EXT("SLIM RX5 Mux", slim_rx_mux_enum,
++			  slim_rx_mux_get, slim_rx_mux_put),
++};
++
++/* register value 0 is 0 dB, range -84..+40 dB */
++static const struct snd_kcontrol_new wcd9306_rx4_controls[] = {
++	SOC_SINGLE_S8_TLV("RX4 Digital Volume", TAPAN_A_CDC_RX4_VOL_CTL_B2_CTL,
++			  -84, 40, digital_gain),
++};
++
++static const struct snd_kcontrol_new wcd9302_rx3_controls[] = {
++	SOC_SINGLE_S8_TLV("RX3 Digital Volume", TAPAN_A_CDC_RX3_VOL_CTL_B2_CTL,
++			  -84, 40, digital_gain),
++};
++
++static const struct snd_kcontrol_new wcd9306_snd_controls[] = {
++	SOC_SINGLE_TLV("SPK DRV Volume", TAPAN_A_SPKR_DRV_GAIN, 3, 8, 1,
++		       line_gain),
++	SOC_SINGLE_TLV("ADC1 Volume", TAPAN_A_TX_1_EN, 2, 19, 0, analog_gain),
++	SOC_SINGLE_S8_TLV("DEC1 Volume", TAPAN_A_CDC_TX1_VOL_CTL_GAIN,
++			  -84, 40, digital_gain),
++	SOC_SINGLE_S8_TLV("IIR1 INP1 Volume", TAPAN_A_CDC_IIR1_GAIN_B1_CTL,
++			  -84, 40, digital_gain),
++};
++
++/* ------------------------------------------------------------------------ */
++/* widgets and routes                                                        */
++
++static const struct snd_soc_dapm_widget wcd9306_dapm_widgets[] = {
++	SND_SOC_DAPM_SUPPLY("MCLK", SND_SOC_NOPM, 0, 0,
++			    wcd9306_codec_enable_mclk,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++
++	SND_SOC_DAPM_AIF_IN_E("AIF1 PB", "AIF1 Playback", 0, SND_SOC_NOPM,
++			      AIF1_PB, 0, wcd9306_codec_enable_slim,
++			      SND_SOC_DAPM_POST_PMD),
++
++	SND_SOC_DAPM_MUX("SLIM RX1 MUX", SND_SOC_NOPM, WCD9306_RX1, 0,
++			 &slim_rx_mux[WCD9306_RX1]),
++	SND_SOC_DAPM_MUX("SLIM RX2 MUX", SND_SOC_NOPM, WCD9306_RX2, 0,
++			 &slim_rx_mux[WCD9306_RX2]),
++	SND_SOC_DAPM_MUX("SLIM RX3 MUX", SND_SOC_NOPM, WCD9306_RX3, 0,
++			 &slim_rx_mux[WCD9306_RX3]),
++	SND_SOC_DAPM_MUX("SLIM RX4 MUX", SND_SOC_NOPM, WCD9306_RX4, 0,
++			 &slim_rx_mux[WCD9306_RX4]),
++	SND_SOC_DAPM_MUX("SLIM RX5 MUX", SND_SOC_NOPM, WCD9306_RX5, 0,
++			 &slim_rx_mux[WCD9306_RX5]),
++
++	SND_SOC_DAPM_MIXER("SLIM RX1", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_MIXER("SLIM RX2", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_MIXER("SLIM RX3", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_MIXER("SLIM RX4", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_MIXER("SLIM RX5", SND_SOC_NOPM, 0, 0, NULL, 0),
++
++	/* class-D speaker */
++	SND_SOC_DAPM_MIXER("SPK DAC", SND_SOC_NOPM, 0, 0,
++			   spk_dac_switch, ARRAY_SIZE(spk_dac_switch)),
++	SND_SOC_DAPM_PGA_E("SPK PA", SND_SOC_NOPM, 0, 0, NULL, 0,
++			   wcd9306_codec_enable_spk_pa,
++			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SUPPLY("VDD_SPKDRV", SND_SOC_NOPM, 0, 0,
++			    wcd9306_codec_enable_vdd_spkr,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_OUTPUT("SPK_OUT"),
++
++	/* sidetone: AMIC1 -> ADC1 -> DEC1 -> IIR1 */
++	SND_SOC_DAPM_INPUT("AMIC1"),
++	SND_SOC_DAPM_SUPPLY("LDO_H", SND_SOC_NOPM, 7, 0,
++			    wcd9306_codec_enable_ldo_h,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SUPPLY("MIC BIAS1 External", SND_SOC_NOPM, 0, 0,
++			    wcd9306_codec_enable_micbias1,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
++			    SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_ADC_E("ADC1", NULL, TAPAN_A_TX_1_EN, 7, 0,
++			   wcd9306_codec_enable_adc1,
++			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU),
++	SND_SOC_DAPM_SUPPLY("CDC_CONN", TAPAN_A_CDC_CLK_OTHR_CTL, 2, 0, NULL, 0),
++	SND_SOC_DAPM_MUX_E("DEC1 MUX", TAPAN_A_CDC_CLK_TX_CLK_EN_B1_CTL, 0, 0,
++			   &dec1_mux, wcd9306_codec_enable_dec1,
++			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
++			   SND_SOC_DAPM_PRE_PMD | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_MUX("IIR1 INP1 MUX", SND_SOC_NOPM, 0, 0, &iir1_inp1_mux),
++	SND_SOC_DAPM_PGA("IIR1", TAPAN_A_CDC_CLK_SD_CTL, 0, 0, NULL, 0),
++};
++
++static const struct snd_soc_dapm_route wcd9306_audio_map[] = {
++	{"AIF1 PB", NULL, "MCLK"},
++	{"SLIM RX1 MUX", "AIF1_PB", "AIF1 PB"},
++	{"SLIM RX2 MUX", "AIF1_PB", "AIF1 PB"},
++	{"SLIM RX3 MUX", "AIF1_PB", "AIF1 PB"},
++	{"SLIM RX4 MUX", "AIF1_PB", "AIF1 PB"},
++	{"SLIM RX5 MUX", "AIF1_PB", "AIF1 PB"},
++	{"SLIM RX1", NULL, "SLIM RX1 MUX"},
++	{"SLIM RX2", NULL, "SLIM RX2 MUX"},
++	{"SLIM RX3", NULL, "SLIM RX3 MUX"},
++	{"SLIM RX4", NULL, "SLIM RX4 MUX"},
++	{"SLIM RX5", NULL, "SLIM RX5 MUX"},
++
++	{"SPK DAC", NULL, "VDD_SPKDRV"},
++	{"SPK PA", NULL, "SPK DAC"},
++	{"SPK_OUT", NULL, "SPK PA"},
++
++	/* sidetone */
++	{"MIC BIAS1 External", NULL, "LDO_H"},
++	{"LDO_H", NULL, "MCLK"},
++	{"ADC1", NULL, "AMIC1"},
++	{"DEC1 MUX", "ADC1", "ADC1"},
++	{"DEC1 MUX", NULL, "CDC_CONN"},
++	{"CDC_CONN", NULL, "MCLK"},
++	{"IIR1 INP1 MUX", "DEC1", "DEC1 MUX"},
++	{"IIR1", NULL, "IIR1 INP1 MUX"},
++};
++
++/* WCD9306: RX4 interpolator feeds the class-D speaker (wcd9306_map) */
++static const struct snd_soc_dapm_widget wcd9306_rx4_widgets[] = {
++	SND_SOC_DAPM_MUX("RX4 MIX1 INP1", SND_SOC_NOPM, 0, 0,
++			 &rx4_mix1_inp1_mux),
++	SND_SOC_DAPM_MUX("RX4 MIX1 INP2", SND_SOC_NOPM, 0, 0,
++			 &rx4_mix1_inp2_mux),
++	SND_SOC_DAPM_MUX("RX4 MIX2 INP1", SND_SOC_NOPM, 0, 0,
++			 &rx4_mix2_inp1_mux),
++	SND_SOC_DAPM_MIXER("RX4 MIX1", SND_SOC_NOPM, 0, 0, NULL, 0),
++	SND_SOC_DAPM_MIXER_E("RX4 MIX2", TAPAN_A_CDC_CLK_RX_B1_CTL, 3, 0, NULL,
++			     0, wcd9306_codec_enable_interpolator,
++			     SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU),
++};
++
++static const struct snd_soc_dapm_route wcd9306_rx4_routes[] = {
++	{"RX4 MIX1 INP1", "RX1", "SLIM RX1"},
++	{"RX4 MIX1 INP1", "RX2", "SLIM RX2"},
++	{"RX4 MIX1 INP1", "RX3", "SLIM RX3"},
++	{"RX4 MIX1 INP1", "RX4", "SLIM RX4"},
++	{"RX4 MIX1 INP1", "RX5", "SLIM RX5"},
++	{"RX4 MIX1 INP1", "IIR1", "IIR1"},
++	{"RX4 MIX1 INP2", "RX1", "SLIM RX1"},
++	{"RX4 MIX1 INP2", "RX2", "SLIM RX2"},
++	{"RX4 MIX1 INP2", "RX3", "SLIM RX3"},
++	{"RX4 MIX1 INP2", "RX4", "SLIM RX4"},
++	{"RX4 MIX1 INP2", "RX5", "SLIM RX5"},
++	{"RX4 MIX1 INP2", "IIR1", "IIR1"},
++	{"RX4 MIX2 INP1", "IIR1", "IIR1"},
++	{"RX4 MIX1", NULL, "RX4 MIX1 INP1"},
++	{"RX4 MIX1", NULL, "RX4 MIX1 INP2"},
++	{"RX4 MIX2", NULL, "RX4 MIX1"},
++	{"RX4 MIX2", NULL, "RX4 MIX2 INP1"},
++	{"RX4 MIX2", NULL, "MCLK"},
++
++	{"SPK DAC", "Switch", "RX4 MIX2"},
++};
++
++/* WCD9302: no RX4, the speaker takes RX3 (wcd9302_map) */
++static const struct snd_soc_dapm_widget wcd9302_rx3_widgets[] = {
++	SND_SOC_DAPM_MUX("RX3 MIX1 INP1", SND_SOC_NOPM, 0, 0,
++			 &rx3_mix1_inp1_mux),
++	SND_SOC_DAPM_MUX("RX3 MIX1 INP2", SND_SOC_NOPM, 0, 0,
++			 &rx3_mix1_inp2_mux),
++	SND_SOC_DAPM_MIXER_E("RX3 MIX1", TAPAN_A_CDC_CLK_RX_B1_CTL, 2, 0, NULL,
++			     0, wcd9306_codec_enable_interpolator,
++			     SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU),
++};
++
++static const struct snd_soc_dapm_route wcd9302_rx3_routes[] = {
++	{"RX3 MIX1 INP1", "RX1", "SLIM RX1"},
++	{"RX3 MIX1 INP1", "RX2", "SLIM RX2"},
++	{"RX3 MIX1 INP1", "RX3", "SLIM RX3"},
++	{"RX3 MIX1 INP1", "RX4", "SLIM RX4"},
++	{"RX3 MIX1 INP1", "RX5", "SLIM RX5"},
++	{"RX3 MIX1 INP1", "IIR1", "IIR1"},
++	{"RX3 MIX1 INP2", "RX1", "SLIM RX1"},
++	{"RX3 MIX1 INP2", "RX2", "SLIM RX2"},
++	{"RX3 MIX1 INP2", "RX3", "SLIM RX3"},
++	{"RX3 MIX1 INP2", "RX4", "SLIM RX4"},
++	{"RX3 MIX1 INP2", "RX5", "SLIM RX5"},
++	{"RX3 MIX1 INP2", "IIR1", "IIR1"},
++	{"RX3 MIX1", NULL, "RX3 MIX1 INP1"},
++	{"RX3 MIX1", NULL, "RX3 MIX1 INP2"},
++	{"RX3 MIX1", NULL, "MCLK"},
++
++	{"SPK DAC", "Switch", "RX3 MIX1"},
++};
++
++/* ------------------------------------------------------------------------ */
++/* DAI                                                                       */
++
++static int wcd9306_set_interpolator_rate(struct snd_soc_dai *dai, u8 val)
++{
++	struct snd_soc_component *comp = dai->component;
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++	struct wcd9306_slim_ch *ch;
++	unsigned int b1, b2;
++	u8 inp;
++
++	/* only the speaker interpolator: set its rate if it takes a SLIM RX */
++	if (wcd->is_9302) {
++		b1 = snd_soc_component_read(comp, TAPAN_A_CDC_CONN_RX3_B1_CTL);
++		b2 = 0;
++	} else {
++		b1 = snd_soc_component_read(comp, TAPAN_A_CDC_CONN_RX4_B1_CTL);
++		b2 = snd_soc_component_read(comp, TAPAN_A_CDC_CONN_RX4_B2_CTL);
++	}
++	list_for_each_entry(ch, &wcd->dai[dai->id].slim_ch_list, list) {
++		/* RX_MIX1 input value: RX1 = 5 .. RX5 = 9 */
++		inp = ch->port - WCD9306_RX_PORT_START + 5;
++		if ((b1 & 0x0f) == inp || ((b1 >> 4) & 0x0f) == inp ||
++		    (b2 & 0x0f) == inp)
++			snd_soc_component_update_bits(comp,
++				TAPAN_A_CDC_RX1_B5_CTL + 8 * wcd->spk_int,
++				0xe0, val);
++	}
++	return 0;
++}
++
++static int wcd9306_slim_set_hw_params(struct wcd9306_priv *wcd,
++				      struct wcd9306_dai_data *dai_data)
++{
++	struct slim_stream_config *cfg = &dai_data->sconfig;
++	struct wcd9306_slim_ch *ch;
++	u16 payload = 0;
++	int ret, i;
++
++	cfg->ch_count = 0;
++	cfg->direction = SNDRV_PCM_STREAM_PLAYBACK;
++	cfg->port_mask = 0;
++
++	list_for_each_entry(ch, &dai_data->slim_ch_list, list) {
++		cfg->ch_count++;
++		payload |= 1 << ch->shift;
++		cfg->port_mask |= BIT(ch->port);
++	}
++
++	kfree(cfg->chs);
++	cfg->chs = kcalloc(cfg->ch_count, sizeof(unsigned int), GFP_KERNEL);
++	if (!cfg->chs)
++		return -ENOMEM;
++
++	i = 0;
++	list_for_each_entry(ch, &dai_data->slim_ch_list, list) {
++		cfg->chs[i++] = ch->ch_num;
++		ret = regmap_write(wcd->if_regmap,
++				   WCD9306_SLIM_RX_MULTI_CHAN(ch->port),
++				   payload);
++		if (ret < 0)
++			goto err;
++		/* water mark and port enable */
++		ret = regmap_write(wcd->if_regmap,
++				   WCD9306_SLIM_RX_PORT_CFG(ch->port),
++				   WCD9306_SLIM_WATER_MARK_VAL);
++		if (ret < 0)
++			goto err;
++	}
++
++	if (!dai_data->sruntime)
++		dai_data->sruntime = slim_stream_allocate(wcd->slim,
++							  "WCD9306-SLIM");
++	return 0;
++
++err:
++	dev_err(wcd->dev, "SLIMbus port setup failed: %d\n", ret);
++	kfree(cfg->chs);
++	cfg->chs = NULL;
++	return ret;
++}
++
++static int wcd9306_hw_params(struct snd_pcm_substream *substream,
++			     struct snd_pcm_hw_params *params,
++			     struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *comp = dai->component;
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
++	u8 rx_fs;
++
++	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
++		return -EINVAL;
++	if (wcd->is_9302 && params_rate(params) > 48000)
++		return -EINVAL;
++
++	switch (params_rate(params)) {
++	case 8000:
++		rx_fs = 0x00;
++		break;
++	case 16000:
++		rx_fs = 0x20;
++		break;
++	case 32000:
++		rx_fs = 0x40;
++		break;
++	case 48000:
++		rx_fs = 0x60;
++		break;
++	case 96000:
++		rx_fs = 0x80;
++		break;
++	case 192000:
++		rx_fs = 0xa0;
++		break;
++	default:
++		dev_err(wcd->dev, "rate %d not supported\n",
++			params_rate(params));
++		return -EINVAL;
++	}
++	wcd9306_set_interpolator_rate(dai, rx_fs);
++
++	switch (params_width(params)) {
++	case 16:
++		snd_soc_component_write(comp, TAPAN_A_CDC_CONN_RX_SB_B1_CTL, 0xaa);
++		snd_soc_component_write(comp, TAPAN_A_CDC_CONN_RX_SB_B2_CTL, 0x2a);
++		break;
++	case 24:
++		snd_soc_component_write(comp, TAPAN_A_CDC_CONN_RX_SB_B1_CTL, 0x00);
++		snd_soc_component_write(comp, TAPAN_A_CDC_CONN_RX_SB_B2_CTL, 0x00);
++		break;
++	default:
++		dev_err(wcd->dev, "width %d not supported\n",
++			params_width(params));
++		return -EINVAL;
++	}
++
++	wcd->dai[dai->id].sconfig.rate = params_rate(params);
++	wcd->dai[dai->id].sconfig.bps = params_width(params);
++
++	return wcd9306_slim_set_hw_params(wcd, &wcd->dai[dai->id]);
++}
++
++static int wcd9306_trigger(struct snd_pcm_substream *substream, int cmd,
++			   struct snd_soc_dai *dai)
++{
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(dai->component);
++	struct wcd9306_dai_data *dai_data = &wcd->dai[dai->id];
++
++	if (!dai_data->sruntime)
++		return -EINVAL;
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++	case SNDRV_PCM_TRIGGER_RESUME:
++	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
++		slim_stream_prepare(dai_data->sruntime, &dai_data->sconfig);
++		slim_stream_enable(dai_data->sruntime);
++		break;
++	case SNDRV_PCM_TRIGGER_STOP:
++	case SNDRV_PCM_TRIGGER_SUSPEND:
++	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
++		slim_stream_disable(dai_data->sruntime);
++		slim_stream_unprepare(dai_data->sruntime);
++		break;
+ 	}
++	return 0;
++}
++
++static int wcd9306_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
++{
++	struct snd_soc_component *comp = dai->component;
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(comp);
+ 
+ 	/*
+-	 * O ADSP so responde ao ADDR_QUERY depois do REPORT_PRESENT do codec;
+-	 * como o downstream (LADDR_RETRY), tenta algumas vezes. Ao conseguir,
+-	 * o nucleo chama wcd9306_slim_status(UP), que le o chip id.
++	 * mute of the speaker interpolator: RXn_B6_CTL bit 0, as in the
++	 * same digital core of msm8916-wcd-digital (RXn_B6_CTL_MUTE_MASK)
+ 	 */
++	snd_soc_component_update_bits(comp,
++				      TAPAN_A_CDC_RX1_B6_CTL + 8 * wcd->spk_int,
++				      0x01, mute ? 0x01 : 0x00);
++	return 0;
++}
++
++/*
++ * The machine driver gives the SLIMbus channel numbers of the DSP side
++ * (e.g. 144.. for the q6 SLIMBUS_0_RX port) in rx_slot[]; rx_slot[i] goes
++ * with codec RX port i (SLIM RX(i+1), slave port 16 + i). tx_slot is not
++ * used (no capture DAI yet).
++ */
++static int wcd9306_set_channel_map(struct snd_soc_dai *dai,
++				   unsigned int tx_num,
++				   const unsigned int *tx_slot,
++				   unsigned int rx_num,
++				   const unsigned int *rx_slot)
++{
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(dai->component);
++	unsigned int i;
++
++	if (!rx_slot) {
++		dev_err(wcd->dev, "no rx_slot\n");
++		return -EINVAL;
++	}
++
++	/* the card may pass a longer list (13 RX like apq8096): keep ours */
++	rx_num = min_t(unsigned int, rx_num, WCD9306_RX_MAX);
++	wcd->num_rx_port = rx_num;
++	for (i = 0; i < rx_num; i++)
++		wcd->rx_chs[i].ch_num = rx_slot[i];
++
++	return 0;
++}
++
++static int wcd9306_get_channel_map(const struct snd_soc_dai *dai,
++				   unsigned int *tx_num, unsigned int *tx_slot,
++				   unsigned int *rx_num, unsigned int *rx_slot)
++{
++	struct wcd9306_priv *wcd = snd_soc_component_get_drvdata(dai->component);
++	struct wcd9306_slim_ch *ch;
++	int i = 0;
++
++	if (dai->id != AIF1_PB || !rx_slot || !rx_num)
++		return -EINVAL;
++
++	list_for_each_entry(ch, &wcd->dai[dai->id].slim_ch_list, list)
++		rx_slot[i++] = ch->ch_num;
++	*rx_num = i;
++
++	return 0;
++}
++
++static const struct snd_soc_dai_ops wcd9306_dai_ops = {
++	.hw_params = wcd9306_hw_params,
++	.trigger = wcd9306_trigger,
++	.mute_stream = wcd9306_mute_stream,
++	.set_channel_map = wcd9306_set_channel_map,
++	.get_channel_map = wcd9306_get_channel_map,
++};
++
++static struct snd_soc_dai_driver wcd9306_slim_dais[] = {
++	[AIF1_PB] = {
++		.name = "wcd9306_rx1",
++		.id = AIF1_PB,
++		.playback = {
++			.stream_name = "AIF1 Playback",
++			.rates = WCD9306_RATES,
++			.formats = WCD9306_FORMATS,
++			.rate_min = 8000,
++			.rate_max = 192000,
++			.channels_min = 1,
++			.channels_max = 2,
++		},
++		.ops = &wcd9306_dai_ops,
++	},
++};
++
++/* ------------------------------------------------------------------------ */
++/* component                                                                 */
++
++static int wcd9306_comp_probe(struct snd_soc_component *comp)
++{
++	struct wcd9306_priv *wcd = dev_get_drvdata(comp->dev);
++	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(comp);
++	int i;
++
++	/* the PGD regmap, whatever device the component sits on */
++	snd_soc_component_init_regmap(comp, wcd->regmap);
++	wcd->component = comp;
++
++	for (i = 0; i < NUM_CODEC_DAIS; i++)
++		INIT_LIST_HEAD(&wcd->dai[i].slim_ch_list);
++
++	wcd9306_codec_init(wcd);
++
++	if (wcd->is_9302) {
++		snd_soc_dapm_new_controls(dapm, wcd9302_rx3_widgets,
++					  ARRAY_SIZE(wcd9302_rx3_widgets));
++		snd_soc_dapm_add_routes(dapm, wcd9302_rx3_routes,
++					ARRAY_SIZE(wcd9302_rx3_routes));
++		return snd_soc_add_component_controls(comp,
++				wcd9302_rx3_controls,
++				ARRAY_SIZE(wcd9302_rx3_controls));
++	}
++	snd_soc_dapm_new_controls(dapm, wcd9306_rx4_widgets,
++				  ARRAY_SIZE(wcd9306_rx4_widgets));
++	snd_soc_dapm_add_routes(dapm, wcd9306_rx4_routes,
++				ARRAY_SIZE(wcd9306_rx4_routes));
++	return snd_soc_add_component_controls(comp, wcd9306_rx4_controls,
++					      ARRAY_SIZE(wcd9306_rx4_controls));
++}
++
++static void wcd9306_comp_remove(struct snd_soc_component *comp)
++{
++	struct wcd9306_priv *wcd = dev_get_drvdata(comp->dev);
++	int i;
++
++	for (i = 0; i < NUM_CODEC_DAIS; i++) {
++		kfree(wcd->dai[i].sconfig.chs);
++		wcd->dai[i].sconfig.chs = NULL;
++	}
++}
++
++static int wcd9306_comp_set_sysclk(struct snd_soc_component *comp,
++				   int clk_id, int source,
++				   unsigned int freq, int dir)
++{
++	struct wcd9306_priv *wcd = dev_get_drvdata(comp->dev);
++
++	if (freq != WCD9306_MCLK_9P6MHZ && freq != WCD9306_MCLK_12P288MHZ)
++		return -EINVAL;
++
++	wcd->mclk_rate = freq;
++	if (wcd->mclk)
++		return clk_set_rate(wcd->mclk, freq);
++	return 0;
++}
++
++static const struct snd_soc_component_driver wcd9306_component_drv = {
++	.probe = wcd9306_comp_probe,
++	.remove = wcd9306_comp_remove,
++	.set_sysclk = wcd9306_comp_set_sysclk,
++	.controls = wcd9306_snd_controls,
++	.num_controls = ARRAY_SIZE(wcd9306_snd_controls),
++	.dapm_widgets = wcd9306_dapm_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(wcd9306_dapm_widgets),
++	.dapm_routes = wcd9306_audio_map,
++	.num_dapm_routes = ARRAY_SIZE(wcd9306_audio_map),
++	.endianness = 1,
++};
++
++/* ------------------------------------------------------------------------ */
++/* regmap                                                                    */
++
++static bool wcd9306_readable_reg(struct device *dev, unsigned int reg)
++{
++	return reg < TAPAN_NUM_REGISTERS && wcd9306_reg_readable[reg];
++}
++
++static const struct regmap_config wcd9306_regmap_config = {
++	.name = "pgd",
++	.reg_bits = 16,
++	.val_bits = 8,
++	.reg_base = WCD9306_SLIM_REG_BASE,
++	.max_register = TAPAN_MAX_REGISTER,
++	.readable_reg = wcd9306_readable_reg,
++	.cache_type = REGCACHE_NONE,
++};
++
++static const struct regmap_config wcd9306_ifc_regmap_config = {
++	.name = "ifd",
++	.reg_bits = 16,
++	.val_bits = 8,
++	.reg_base = WCD9306_SLIM_REG_BASE,
++	.max_register = 0x1ff,
++	.cache_type = REGCACHE_NONE,
++};
++
++/* ------------------------------------------------------------------------ */
++/* SLIMbus device                                                            */
++
++static int wcd9306_get_laddr(struct slim_device *sdev)
++{
++	int i, ret = -ENXIO;
++
+ 	for (i = 0; i < WCD9306_LADDR_TRIES; i++) {
+ 		ret = slim_get_logical_addr(sdev);
+ 		if (!ret)
++			return 0;
++		msleep(20);
++	}
++	return ret;
++}
++
++/*
++ * WCD9306 or WCD9302 (tapan_check_wcd9306): sense the QFUSE with the RCO on;
++ * DATA_OUT1/2 are zero on the WCD9306.
++ */
++static bool wcd9306_is_9302(struct wcd9306_priv *wcd)
++{
++	struct regmap *rm = wcd->regmap;
++	unsigned int st = 0, d[8];
++	int i, tries;
++
++	mutex_lock(&wcd->clk_lock);
++	wcd9306_get_bandgap(wcd);
++	wcd9306_get_clk_block(wcd, WCD9306_CLK_RCO);
++
++	regmap_update_bits(rm, TAPAN_A_QFUSE_CTL, 0x03, 0x03);
++	for (tries = 0; tries < 100; tries++) {
++		regmap_read(rm, TAPAN_A_QFUSE_STATUS, &st);
++		if (st)
+ 			break;
++		usleep_range(1000, 1100);
++	}
++	for (i = 0; i < 8; i++)
++		regmap_read(rm, TAPAN_A_QFUSE_DATA_OUT0 + i, &d[i]);
++
++	wcd9306_put_clk_block(wcd, WCD9306_CLK_RCO);
++	wcd9306_put_bandgap(wcd);
++	mutex_unlock(&wcd->clk_lock);
++
++	dev_info(wcd->dev,
++		 "QFUSE status 0x%02x (%d ms): %02x %02x %02x %02x %02x %02x %02x %02x\n",
++		 st, tries, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
++	if (!st)
++		dev_warn(wcd->dev, "QFUSE not sensed, assuming WCD9306\n");
++
++	return st && (d[1] || d[2]);
++}
++
++static int wcd9306_bring_up(struct wcd9306_priv *wcd)
++{
++	struct regmap *rm = wcd->regmap;
++	unsigned int id[4], ver;
++	u16 major;
++	int i, ret;
++
++	/* wcd9xxx_bring_up */
++	regmap_write(rm, TAPAN_A_LEAKAGE_CTL, 0x04);
++	regmap_write(rm, TAPAN_A_CDC_CTL, 0x00);
++	usleep_range(5000, 5100);
++	regmap_write(rm, TAPAN_A_CDC_CTL, 0x03);
++	regmap_write(rm, TAPAN_A_LEAKAGE_CTL, 0x03);
++
++	for (i = 0; i < 4; i++) {
++		ret = regmap_read(rm, TAPAN_A_CHIP_ID_BYTE_0 + i, &id[i]);
++		if (ret)
++			return ret;
++	}
++	ret = regmap_read(rm, TAPAN_A_CHIP_VERSION, &ver);
++	if (ret)
++		return ret;
++
++	major = id[2] | (id[3] << 8);
++	wcd->version = ver & 0x1f;
++	dev_info(wcd->dev, "WCD9306 chip id major 0x%04x minor 0x%04x, version %u\n",
++		 major, id[0] | (id[1] << 8), wcd->version);
++	if (major != WCD9306_CHIP_MAJOR) {
++		dev_err(wcd->dev, "not a tapan codec (major 0x%04x)\n", major);
++		return -ENODEV;
++	}
++
++	wcd->is_9302 = wcd9306_is_9302(wcd);
++	wcd->spk_int = wcd->is_9302 ? 2 : 3;
++	dev_info(wcd->dev, "variant %s, speaker on RX%u\n",
++		 wcd->is_9302 ? "WCD9302" : "WCD9306", wcd->spk_int + 1);
++	return 0;
++}
++
++static void wcd9306_regmap_exit(void *data)
++{
++	regmap_exit(data);
++}
++
++/*
++ * regmap_init_slimbus() and not the devm_ variant: __devm_regmap_init_slimbus()
++ * of 6.16 passes &slimbus (address of its own argument) as the bus context.
++ */
++static struct regmap *wcd9306_regmap_init(struct device *owner,
++					  struct slim_device *sdev,
++					  const struct regmap_config *cfg)
++{
++	struct regmap *rm;
++	int ret;
++
++	rm = regmap_init_slimbus(sdev, cfg);
++	if (IS_ERR(rm))
++		return rm;
++	ret = devm_add_action_or_reset(owner, wcd9306_regmap_exit, rm);
++	if (ret)
++		return ERR_PTR(ret);
++	return rm;
++}
++
++/* pgd: register access device, ifd: SLIMbus port device, dev: bound device */
++static int wcd9306_init(struct wcd9306_priv *wcd, struct slim_device *pgd,
++			struct slim_device *ifd, struct device *dev)
++{
++	int ret;
++
++	ret = wcd9306_get_laddr(ifd);
++	if (ret) {
++		dev_err(dev, "interface device without logical address: %d\n",
++			ret);
++		return ret;
++	}
++	dev_info(dev, "PGD %s LA 0x%x, IFD %s LA 0x%x\n",
++		 dev_name(&pgd->dev), pgd->laddr,
++		 dev_name(&ifd->dev), ifd->laddr);
++
++	wcd->slim = pgd;
++	wcd->slim_ifc_dev = ifd;
++
++	if (!wcd->regmap) {
++		wcd->regmap = wcd9306_regmap_init(dev, pgd,
++						  &wcd9306_regmap_config);
++		if (IS_ERR(wcd->regmap)) {
++			ret = PTR_ERR(wcd->regmap);
++			wcd->regmap = NULL;
++			return dev_err_probe(dev, ret, "regmap\n");
++		}
++	}
++	if (!wcd->if_regmap) {
++		wcd->if_regmap = wcd9306_regmap_init(dev, ifd,
++						     &wcd9306_ifc_regmap_config);
++		if (IS_ERR(wcd->if_regmap)) {
++			ret = PTR_ERR(wcd->if_regmap);
++			wcd->if_regmap = NULL;
++			return dev_err_probe(dev, ret, "ifd regmap\n");
++		}
++	}
++
++	ret = wcd9306_bring_up(wcd);
++	if (ret)
++		return ret;
++
++	ret = devm_snd_soc_register_component(dev, &wcd9306_component_drv,
++					      wcd9306_slim_dais,
++					      ARRAY_SIZE(wcd9306_slim_dais));
++	if (ret)
++		return dev_err_probe(dev, ret, "register component\n");
++
++	wcd->registered = true;
++	return 0;
++}
++
++/* elemental address of the other function of the codec (PGD <-> IFD) */
++static struct slim_device *wcd9306_sibling(struct slim_device *sdev,
++					   u8 dev_index)
++{
++	struct slim_eaddr ea = {
++		.manf_id = sdev->e_addr.manf_id,
++		.prod_code = sdev->e_addr.prod_code,
++		.dev_index = dev_index,
++		.instance = sdev->e_addr.instance,
++	};
++
++	return slim_get_device(sdev->ctrl, &ea);
++}
++
++static int wcd9306_slim_status(struct slim_device *sdev,
++			       enum slim_device_status status)
++{
++	struct device *dev = &sdev->dev;
++	struct wcd9306_priv *wcd = dev_get_drvdata(dev);
++	struct device_node *np;
++	struct slim_device *ifd;
++
++	dev_info(dev, "SLIMbus %s, LA 0x%x\n",
++		 status == SLIM_DEVICE_STATUS_UP ? "UP" : "DOWN", sdev->laddr);
++	if (status != SLIM_DEVICE_STATUS_UP || wcd->registered)
++		return 0;
++
++	/* "slim-ifc-dev" like wcd9335, else the EA 00 00 e0 00 17 02 */
++	np = of_parse_phandle(dev->of_node, "slim-ifc-dev", 0);
++	if (np) {
++		ifd = of_slim_get_device(sdev->ctrl, np);
++		of_node_put(np);
++	} else {
++		ifd = wcd9306_sibling(sdev, 0);
++	}
++	if (IS_ERR_OR_NULL(ifd)) {
++		dev_err(dev, "no SLIMbus interface device\n");
++		return -EINVAL;
++	}
++	return wcd9306_init(wcd, sdev, ifd, dev);
++}
++
++static void wcd9306_supplies_off(void *data)
++{
++	struct wcd9306_priv *wcd = data;
++
++	regulator_bulk_disable(ARRAY_SIZE(wcd->supplies), wcd->supplies);
++}
++
++/* driver data, clock, supplies and reset line of the bound device */
++static struct wcd9306_priv *wcd9306_setup(struct device *dev)
++{
++	struct wcd9306_priv *wcd;
++	int i, ret;
++
++	wcd = devm_kzalloc(dev, sizeof(*wcd), GFP_KERNEL);
++	if (!wcd)
++		return ERR_PTR(-ENOMEM);
++
++	wcd->dev = dev;
++	mutex_init(&wcd->clk_lock);
++	wcd->mclk_rate = WCD9306_MCLK_9P6MHZ;
++	for (i = 0; i < WCD9306_RX_MAX; i++) {
++		wcd->rx_chs[i].port = WCD9306_RX_PORT_START + i;
++		wcd->rx_chs[i].shift = i;
++		INIT_LIST_HEAD(&wcd->rx_chs[i].list);
++	}
++
++	wcd->mclk = devm_clk_get_optional(dev, "mclk");
++	if (IS_ERR(wcd->mclk))
++		return ERR_PTR(dev_err_probe(dev, PTR_ERR(wcd->mclk), "mclk\n"));
++	if (!wcd->mclk)
++		dev_warn(dev, "no mclk in DT, %s\n",
++			 allow_rco ? "audio clock from the internal RCO (test)" :
++				     "no audio clock");
++	else
++		clk_set_rate(wcd->mclk, wcd->mclk_rate);
++
++	for (i = 0; i < ARRAY_SIZE(wcd9306_static_supplies); i++)
++		wcd->supplies[i].supply = wcd9306_static_supplies[i];
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(wcd->supplies),
++				      wcd->supplies);
++	if (ret)
++		return ERR_PTR(dev_err_probe(dev, ret, "supplies\n"));
++	ret = regulator_bulk_enable(ARRAY_SIZE(wcd->supplies), wcd->supplies);
++	if (ret)
++		return ERR_PTR(dev_err_probe(dev, ret, "enable supplies\n"));
++	ret = devm_add_action_or_reset(dev, wcd9306_supplies_off, wcd);
++	if (ret)
++		return ERR_PTR(ret);
++
++	wcd->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_ASIS);
++	if (IS_ERR(wcd->reset_gpio))
++		return ERR_PTR(dev_err_probe(dev, PTR_ERR(wcd->reset_gpio),
++					     "reset\n"));
++
++	dev_set_drvdata(dev, wcd);
++	return wcd;
++}
++
++static int wcd9306_slim_probe(struct slim_device *sdev)
++{
++	struct device *dev = &sdev->dev;
++	struct wcd9306_priv *wcd;
++	int ret;
++
++	wcd = wcd9306_setup(dev);
++	if (IS_ERR(wcd))
++		return PTR_ERR(wcd);
++
++	/*
++	 * Driver rebound to a codec that is already enumerated: the SLIMbus
++	 * core only calls device_status() on a status change, and a reset now
++	 * would invalidate the logical address it keeps. Use it as it is.
++	 */
++	if (sdev->is_laddr_valid && sdev->status == SLIM_DEVICE_STATUS_UP) {
++		dev_info(dev, "codec already enumerated (LA 0x%x), no reset\n",
++			 sdev->laddr);
++		return wcd9306_slim_status(sdev, SLIM_DEVICE_STATUS_UP);
++	}
++
++	if (wcd->reset_gpio) {
++		/* active low: 1 = in reset */
++		gpiod_direction_output(wcd->reset_gpio, 1);
+ 		msleep(20);
++		gpiod_set_value_cansleep(wcd->reset_gpio, 0);
++		msleep(20);
++		dev_info(dev, "codec reset\n");
+ 	}
++
++	/* the codec reports present after the reset: retry the address */
++	ret = wcd9306_get_laddr(sdev);
+ 	if (ret)
+-		dev_err(dev, "sem endereco logico apos %d tentativas: %d\n",
+-			WCD9306_LADDR_TRIES, ret);
++		dev_warn(dev, "no logical address yet: %d\n", ret);
+ 
+-	return devm_snd_soc_register_component(dev, &wcd9306_component_drv,
+-					       NULL, 0);
++	return 0;
+ }
+ 
+ static const struct slim_device_id wcd9306_slim_id[] = {
+-	{0x0217, 0x00e0, 0x1, 0x0},
+-	{}
++	{ 0x0217, 0x00e0, 0x1, 0x0 },
++	{ }
+ };
+ MODULE_DEVICE_TABLE(slim, wcd9306_slim_id);
+ 
+@@ -139,6 +1716,6 @@ static struct slim_driver wcd9306_slim_driver = {
+ };
+ module_slim_driver(wcd9306_slim_driver);
+ 
+-MODULE_DESCRIPTION("WCD9306 SLIMbus codec (esqueleto)");
++MODULE_DESCRIPTION("WCD9306 (tapan) SLIMbus audio codec");
+ MODULE_AUTHOR("Allan Siriani <allan@fatecpompeia.edu.br>");
+ MODULE_LICENSE("GPL");
+diff --git a/sound/soc/codecs/wcd9306.h b/sound/soc/codecs/wcd9306.h
+new file mode 100644
+index 000000000..6be0715cd
+--- /dev/null
++++ b/sound/soc/codecs/wcd9306.h
+@@ -0,0 +1,520 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
++ *
++ * Register map of the Qualcomm WCD9306 (tapan) audio codec.
++ * Taken from the msm-3.4 kernel (include/linux/mfd/wcd9xxx/wcd9306_registers.h),
++ * GPL-2.0 only; reduced to the register addresses (the __POR values live in
++ * wcd9306-tables.c).
++ */
++#ifndef __WCD9306_H__
++#define __WCD9306_H__
++
++#define TAPAN_A_CHIP_CTL                   0x000
++#define TAPAN_A_CHIP_STATUS                0x001
++#define TAPAN_A_CHIP_ID_BYTE_0             0x004
++#define TAPAN_A_CHIP_ID_BYTE_1             0x005
++#define TAPAN_A_CHIP_ID_BYTE_2             0x006
++#define TAPAN_A_CHIP_ID_BYTE_3             0x007
++#define TAPAN_A_CHIP_VERSION               0x008
++#define TAPAN_A_CHIP_DEBUG_CTL             0x009
++#define TAPAN_A_SLAVE_ID_1                 0x00C
++#define TAPAN_A_SLAVE_ID_2                 0x00D
++#define TAPAN_A_SLAVE_ID_3                 0x00E
++#define TAPAN_A_PIN_CTL_OE0                0x010
++#define TAPAN_A_PIN_CTL_DATA0              0x012
++#define TAPAN_A_HDRIVE_GENERIC             0x018
++#define TAPAN_A_HDRIVE_OVERRIDE            0x019
++#define TAPAN_A_ANA_CSR_WAIT_STATE         0x020
++#define TAPAN_A_PROCESS_MONITOR_CTL0       0x040
++#define TAPAN_A_PROCESS_MONITOR_CTL1       0x041
++#define TAPAN_A_PROCESS_MONITOR_CTL2       0x042
++#define TAPAN_A_PROCESS_MONITOR_CTL3       0x043
++#define TAPAN_A_QFUSE_CTL                  0x048
++#define TAPAN_A_QFUSE_STATUS               0x049
++#define TAPAN_A_QFUSE_DATA_OUT0            0x04A
++#define TAPAN_A_QFUSE_DATA_OUT1            0x04B
++#define TAPAN_A_QFUSE_DATA_OUT2            0x04C
++#define TAPAN_A_QFUSE_DATA_OUT3            0x04D
++#define TAPAN_A_QFUSE_DATA_OUT4            0x04E
++#define TAPAN_A_QFUSE_DATA_OUT5            0x04F
++#define TAPAN_A_QFUSE_DATA_OUT6            0x050
++#define TAPAN_A_QFUSE_DATA_OUT7            0x051
++#define TAPAN_A_CDC_CTL                    0x080
++#define TAPAN_A_LEAKAGE_CTL                0x088
++#define TAPAN_A_INTR_MODE                  0x090
++#define TAPAN_A_INTR_MASK0                 0x094
++#define TAPAN_A_INTR_MASK1                 0x095
++#define TAPAN_A_INTR_MASK2                 0x096
++#define TAPAN_A_INTR_MASK3                 0x097
++#define TAPAN_A_INTR_STATUS0               0x098
++#define TAPAN_A_INTR_STATUS1               0x099
++#define TAPAN_A_INTR_STATUS2               0x09A
++#define TAPAN_A_INTR_STATUS3               0x09B
++#define TAPAN_A_INTR_CLEAR0                0x09C
++#define TAPAN_A_INTR_CLEAR1                0x09D
++#define TAPAN_A_INTR_CLEAR2                0x09E
++#define TAPAN_A_INTR_CLEAR3                0x09F
++#define TAPAN_A_INTR_LEVEL0                0x0A0
++#define TAPAN_A_INTR_LEVEL1                0x0A1
++#define TAPAN_A_INTR_LEVEL2                0x0A2
++#define TAPAN_A_INTR_LEVEL3                0x0A3
++#define TAPAN_A_INTR_TEST0                 0x0A4
++#define TAPAN_A_INTR_TEST1                 0x0A5
++#define TAPAN_A_INTR_TEST2                 0x0A6
++#define TAPAN_A_INTR_TEST3                 0x0A7
++#define TAPAN_A_INTR_SET0                  0x0A8
++#define TAPAN_A_INTR_SET1                  0x0A9
++#define TAPAN_A_INTR_SET2                  0x0AA
++#define TAPAN_A_INTR_SET3                  0x0AB
++#define TAPAN_A_INTR_DESTN0                0x0AC
++#define TAPAN_A_INTR_DESTN1                0x0AD
++#define TAPAN_A_INTR_DESTN2                0x0AE
++#define TAPAN_A_INTR_DESTN3                0x0AF
++#define TAPAN_A_CDC_DMIC_DATA0_MODE        0x0C0
++#define TAPAN_A_CDC_DMIC_CLK0_MODE         0x0C1
++#define TAPAN_A_CDC_DMIC_DATA1_MODE        0x0C2
++#define TAPAN_A_CDC_DMIC_CLK1_MODE         0x0C3
++#define TAPAN_A_CDC_INTR_MODE              0x0C4
++#define TAPAN_A_BIAS_REF_CTL               0x100
++#define TAPAN_A_BIAS_CENTRAL_BG_CTL        0x101
++#define TAPAN_A_BIAS_PRECHRG_CTL           0x102
++#define TAPAN_A_BIAS_CURR_CTL_1            0x103
++#define TAPAN_A_BIAS_CURR_CTL_2            0x104
++#define TAPAN_A_BIAS_OSC_BG_CTL            0x105
++#define TAPAN_A_CLK_BUFF_EN1               0x108
++#define TAPAN_A_CLK_BUFF_EN2               0x109
++#define TAPAN_A_LDO_H_MODE_1               0x110
++#define TAPAN_A_LDO_H_MODE_2               0x111
++#define TAPAN_A_LDO_H_LOOP_CTL             0x112
++#define TAPAN_A_LDO_H_COMP_1               0x113
++#define TAPAN_A_LDO_H_COMP_2               0x114
++#define TAPAN_A_LDO_H_BIAS_1               0x115
++#define TAPAN_A_LDO_H_BIAS_2               0x116
++#define TAPAN_A_LDO_H_BIAS_3               0x117
++#define TAPAN_A_MICB_CFILT_1_CTL           0x128
++#define TAPAN_A_MICB_CFILT_1_VAL           0x129
++#define TAPAN_A_MICB_CFILT_1_PRECHRG       0x12A
++#define TAPAN_A_MICB_1_CTL                 0x12B
++#define TAPAN_A_MICB_1_INT_RBIAS           0x12C
++#define TAPAN_A_MICB_1_MBHC                0x12D
++#define TAPAN_A_MICB_CFILT_2_CTL           0x12E
++#define TAPAN_A_MICB_CFILT_2_VAL           0x12F
++#define TAPAN_A_MICB_CFILT_2_PRECHRG       0x130
++#define TAPAN_A_MICB_2_CTL                 0x131
++#define TAPAN_A_MICB_2_INT_RBIAS           0x132
++#define TAPAN_A_MICB_2_MBHC                0x133
++#define TAPAN_A_MICB_CFILT_3_CTL           0x134
++#define TAPAN_A_MICB_CFILT_3_VAL           0x135
++#define TAPAN_A_MICB_CFILT_3_PRECHRG       0x136
++#define TAPAN_A_MICB_3_CTL                 0x137
++#define TAPAN_A_MICB_3_INT_RBIAS           0x138
++#define TAPAN_A_MICB_3_MBHC                0x139
++#define TAPAN_A_MBHC_INSERT_DETECT         0x14A
++#define TAPAN_A_MBHC_INSERT_DET_STATUS     0x14B
++#define TAPAN_A_TX_COM_BIAS                0x14C
++#define TAPAN_A_MBHC_SCALING_MUX_1         0x14E
++#define TAPAN_A_MBHC_SCALING_MUX_2         0x14F
++#define TAPAN_A_RESERVED_MAD_ANA_CTRL      0x150
++#define TAPAN_A_TX_SUP_SWITCH_CTRL_1       0x151
++#define TAPAN_A_TX_SUP_SWITCH_CTRL_2       0x152
++#define TAPAN_A_TX_1_EN                    0x153
++#define TAPAN_A_TX_2_EN                    0x154
++#define TAPAN_A_TX_1_2_ADC_CH1             0x155
++#define TAPAN_A_TX_1_2_ADC_CH2             0x156
++#define TAPAN_A_TX_1_2_ATEST_REFCTRL       0x157
++#define TAPAN_A_TX_1_2_TEST_CTL            0x158
++#define TAPAN_A_TX_1_2_TEST_BLOCK_EN       0x159
++#define TAPAN_A_TX_1_2_TXFE_CLKDIV         0x15A
++#define TAPAN_A_TX_1_2_SAR_ERR_CH1         0x15B
++#define TAPAN_A_TX_1_2_SAR_ERR_CH2         0x15C
++#define TAPAN_A_TX_3_EN                    0x15D
++#define TAPAN_A_TX_1_2_TEST_EN             0x15E
++#define TAPAN_A_TX_4_5_TXFE_SC_CTL         0x15F
++#define TAPAN_A_TX_4_5_TEST_EN             0x160
++#define TAPAN_A_TX_4_EN                    0x167
++#define TAPAN_A_TX_5_EN                    0x168
++#define TAPAN_A_TX_4_5_ADC_CH4             0x169
++#define TAPAN_A_TX_4_5_ADC_CH5             0x16A
++#define TAPAN_A_TX_4_5_ATEST_REFCTRL       0x16B
++#define TAPAN_A_TX_4_5_TEST_CTL            0x16C
++#define TAPAN_A_TX_4_5_TEST_BLOCK_EN       0x16D
++#define TAPAN_A_TX_4_5_TXFE_CKDIV          0x16E
++#define TAPAN_A_TX_4_5_SAR_ERR_CH4         0x16F
++#define TAPAN_A_TX_4_5_SAR_ERR_CH5         0x170
++#define TAPAN_A_TX_7_MBHC_EN               0x171
++#define TAPAN_A_TX_7_MBHC_ATEST_REFCTRL    0x172
++#define TAPAN_A_TX_7_MBHC_ADC              0x173
++#define TAPAN_A_TX_7_MBHC_TEST_CTL         0x174
++#define TAPAN_A_TX_7_MBHC_SAR_ERR          0x175
++#define TAPAN_A_TX_7_TXFE_CLKDIV           0x176
++#define TAPAN_A_BUCK_MODE_1                0x181
++#define TAPAN_A_BUCK_MODE_2                0x182
++#define TAPAN_A_BUCK_MODE_3                0x183
++#define TAPAN_A_BUCK_MODE_4                0x184
++#define TAPAN_A_BUCK_MODE_5                0x185
++#define TAPAN_A_BUCK_CTRL_VCL_1            0x186
++#define TAPAN_A_BUCK_CTRL_VCL_2            0x187
++#define TAPAN_A_BUCK_CTRL_VCL_3            0x188
++#define TAPAN_A_BUCK_CTRL_CCL_1            0x189
++#define TAPAN_A_BUCK_CTRL_CCL_2            0x18A
++#define TAPAN_A_BUCK_CTRL_CCL_3            0x18B
++#define TAPAN_A_BUCK_CTRL_CCL_4            0x18C
++#define TAPAN_A_BUCK_CTRL_PWM_DRVR_1       0x18D
++#define TAPAN_A_BUCK_CTRL_PWM_DRVR_2       0x18E
++#define TAPAN_A_BUCK_CTRL_PWM_DRVR_3       0x18F
++#define TAPAN_A_BUCK_TMUX_A_D              0x190
++#define TAPAN_A_NCP_BUCKREF                0x191
++#define TAPAN_A_NCP_EN                     0x192
++#define TAPAN_A_NCP_CLK                    0x193
++#define TAPAN_A_NCP_STATIC                 0x194
++#define TAPAN_A_NCP_VTH_LOW                0x195
++#define TAPAN_A_NCP_VTH_HIGH               0x196
++#define TAPAN_A_NCP_ATEST                  0x197
++#define TAPAN_A_NCP_DTEST                  0x198
++#define TAPAN_A_NCP_DLY1                   0x199
++#define TAPAN_A_NCP_DLY2                   0x19A
++#define TAPAN_A_RX_AUX_SW_CTL              0x19B
++#define TAPAN_A_RX_PA_AUX_IN_CONN          0x19C
++#define TAPAN_A_RX_COM_TIMER_DIV           0x19E
++#define TAPAN_A_RX_COM_OCP_CTL             0x19F
++#define TAPAN_A_RX_COM_OCP_COUNT           0x1A0
++#define TAPAN_A_RX_COM_DAC_CTL             0x1A1
++#define TAPAN_A_RX_COM_BIAS                0x1A2
++#define TAPAN_A_RX_HPH_AUTO_CHOP           0x1A4
++#define TAPAN_A_RX_HPH_CHOP_CTL            0x1A5
++#define TAPAN_A_RX_HPH_BIAS_PA             0x1A6
++#define TAPAN_A_RX_HPH_BIAS_LDO            0x1A7
++#define TAPAN_A_RX_HPH_BIAS_CNP            0x1A8
++#define TAPAN_A_RX_HPH_BIAS_WG_OCP         0x1A9
++#define TAPAN_A_RX_HPH_OCP_CTL             0x1AA
++#define TAPAN_A_RX_HPH_CNP_EN              0x1AB
++#define TAPAN_A_RX_HPH_CNP_WG_CTL          0x1AC
++#define TAPAN_A_RX_HPH_CNP_WG_TIME         0x1AD
++#define TAPAN_A_RX_HPH_L_GAIN              0x1AE
++#define TAPAN_A_RX_HPH_L_TEST              0x1AF
++#define TAPAN_A_RX_HPH_L_PA_CTL            0x1B0
++#define TAPAN_A_RX_HPH_L_DAC_CTL           0x1B1
++#define TAPAN_A_RX_HPH_L_ATEST             0x1B2
++#define TAPAN_A_RX_HPH_L_STATUS            0x1B3
++#define TAPAN_A_RX_HPH_R_GAIN              0x1B4
++#define TAPAN_A_RX_HPH_R_TEST              0x1B5
++#define TAPAN_A_RX_HPH_R_PA_CTL            0x1B6
++#define TAPAN_A_RX_HPH_R_DAC_CTL           0x1B7
++#define TAPAN_A_RX_HPH_R_ATEST             0x1B8
++#define TAPAN_A_RX_HPH_R_STATUS            0x1B9
++#define TAPAN_A_RX_EAR_BIAS_PA             0x1BA
++#define TAPAN_A_RX_EAR_BIAS_CMBUFF         0x1BB
++#define TAPAN_A_RX_EAR_EN                  0x1BC
++#define TAPAN_A_RX_EAR_GAIN                0x1BD
++#define TAPAN_A_RX_EAR_CMBUFF              0x1BE
++#define TAPAN_A_RX_EAR_ICTL                0x1BF
++#define TAPAN_A_RX_EAR_CCOMP               0x1C0
++#define TAPAN_A_RX_EAR_VCM                 0x1C1
++#define TAPAN_A_RX_EAR_CNP                 0x1C2
++#define TAPAN_A_RX_EAR_DAC_CTL_ATEST       0x1C3
++#define TAPAN_A_RX_EAR_STATUS              0x1C5
++#define TAPAN_A_RX_LINE_BIAS_PA            0x1C6
++#define TAPAN_A_RX_BUCK_BIAS1              0x1C7
++#define TAPAN_A_RX_BUCK_BIAS2              0x1C8
++#define TAPAN_A_RX_LINE_COM                0x1C9
++#define TAPAN_A_RX_LINE_CNP_EN             0x1CA
++#define TAPAN_A_RX_LINE_CNP_WG_CTL         0x1CB
++#define TAPAN_A_RX_LINE_CNP_WG_TIME        0x1CC
++#define TAPAN_A_RX_LINE_1_GAIN             0x1CD
++#define TAPAN_A_RX_LINE_1_TEST             0x1CE
++#define TAPAN_A_RX_LINE_1_DAC_CTL          0x1CF
++#define TAPAN_A_RX_LINE_1_STATUS           0x1D0
++#define TAPAN_A_RX_LINE_2_GAIN             0x1D1
++#define TAPAN_A_RX_LINE_2_TEST             0x1D2
++#define TAPAN_A_RX_LINE_2_DAC_CTL          0x1D3
++#define TAPAN_A_RX_LINE_2_STATUS           0x1D4
++#define TAPAN_A_RX_LINE_CNP_DBG            0x1DD
++#define TAPAN_A_SPKR_DRV_EN                0x1DF
++#define TAPAN_A_SPKR_DRV_GAIN              0x1E0
++#define TAPAN_A_SPKR_DRV_DAC_CTL           0x1E1
++#define TAPAN_A_SPKR_DRV_OCP_CTL           0x1E2
++#define TAPAN_A_SPKR_DRV_CLIP_DET          0x1E3
++#define TAPAN_A_SPKR_DRV_IEC               0x1E4
++#define TAPAN_A_SPKR_DRV_DBG_DAC           0x1E5
++#define TAPAN_A_SPKR_DRV_DBG_PA            0x1E6
++#define TAPAN_A_SPKR_DRV_DBG_PWRSTG        0x1E7
++#define TAPAN_A_SPKR_DRV_BIAS_LDO          0x1E8
++#define TAPAN_A_SPKR_DRV_BIAS_INT          0x1E9
++#define TAPAN_A_SPKR_DRV_BIAS_PA           0x1EA
++#define TAPAN_A_SPKR_DRV_STATUS_OCP        0x1EB
++#define TAPAN_A_SPKR_DRV_STATUS_PA         0x1EC
++#define TAPAN_A_RC_OSC_FREQ                0x1FA
++#define TAPAN_A_RC_OSC_TEST                0x1FB
++#define TAPAN_A_RC_OSC_STATUS              0x1FC
++#define TAPAN_A_RC_OSC_TUNER               0x1FD
++#define TAPAN_A_MBHC_HPH                   0x1FE
++#define TAPAN_A_CDC_ANC1_B1_CTL            0x200
++#define TAPAN_A_CDC_ANC2_B1_CTL            0x280
++#define TAPAN_A_CDC_ANC1_SHIFT             0x201
++#define TAPAN_A_CDC_ANC2_SHIFT             0x281
++#define TAPAN_A_CDC_ANC1_IIR_B1_CTL        0x202
++#define TAPAN_A_CDC_ANC2_IIR_B1_CTL        0x282
++#define TAPAN_A_CDC_ANC1_IIR_B2_CTL        0x203
++#define TAPAN_A_CDC_ANC2_IIR_B2_CTL        0x283
++#define TAPAN_A_CDC_ANC1_IIR_B3_CTL        0x204
++#define TAPAN_A_CDC_ANC2_IIR_B3_CTL        0x284
++#define TAPAN_A_CDC_ANC1_LPF_B1_CTL        0x206
++#define TAPAN_A_CDC_ANC2_LPF_B1_CTL        0x286
++#define TAPAN_A_CDC_ANC1_LPF_B2_CTL        0x207
++#define TAPAN_A_CDC_ANC2_LPF_B2_CTL        0x287
++#define TAPAN_A_CDC_ANC1_SPARE             0x209
++#define TAPAN_A_CDC_ANC2_SPARE             0x289
++#define TAPAN_A_CDC_ANC1_SMLPF_CTL         0x20A
++#define TAPAN_A_CDC_ANC2_SMLPF_CTL         0x28A
++#define TAPAN_A_CDC_ANC1_DCFLT_CTL         0x20B
++#define TAPAN_A_CDC_ANC2_DCFLT_CTL         0x28B
++#define TAPAN_A_CDC_ANC1_GAIN_CTL          0x20C
++#define TAPAN_A_CDC_ANC2_GAIN_CTL          0x28C
++#define TAPAN_A_CDC_ANC1_B2_CTL            0x20D
++#define TAPAN_A_CDC_ANC2_B2_CTL            0x28D
++#define TAPAN_A_CDC_TX1_VOL_CTL_TIMER      0x220
++#define TAPAN_A_CDC_TX2_VOL_CTL_TIMER      0x228
++#define TAPAN_A_CDC_TX3_VOL_CTL_TIMER      0x230
++#define TAPAN_A_CDC_TX4_VOL_CTL_TIMER      0x238
++#define TAPAN_A_CDC_TX1_VOL_CTL_GAIN       0x221
++#define TAPAN_A_CDC_TX2_VOL_CTL_GAIN       0x229
++#define TAPAN_A_CDC_TX3_VOL_CTL_GAIN       0x231
++#define TAPAN_A_CDC_TX4_VOL_CTL_GAIN       0x239
++#define TAPAN_A_CDC_TX1_VOL_CTL_CFG        0x222
++#define TAPAN_A_CDC_TX2_VOL_CTL_CFG        0x22A
++#define TAPAN_A_CDC_TX3_VOL_CTL_CFG        0x232
++#define TAPAN_A_CDC_TX4_VOL_CTL_CFG        0x23A
++#define TAPAN_A_CDC_TX1_MUX_CTL            0x223
++#define TAPAN_A_CDC_TX2_MUX_CTL            0x22B
++#define TAPAN_A_CDC_TX3_MUX_CTL            0x233
++#define TAPAN_A_CDC_TX4_MUX_CTL            0x23B
++#define TAPAN_A_CDC_TX1_CLK_FS_CTL         0x224
++#define TAPAN_A_CDC_TX2_CLK_FS_CTL         0x22C
++#define TAPAN_A_CDC_TX3_CLK_FS_CTL         0x234
++#define TAPAN_A_CDC_TX4_CLK_FS_CTL         0x23C
++#define TAPAN_A_CDC_TX1_DMIC_CTL           0x225
++#define TAPAN_A_CDC_TX2_DMIC_CTL           0x22D
++#define TAPAN_A_CDC_TX3_DMIC_CTL           0x235
++#define TAPAN_A_CDC_TX4_DMIC_CTL           0x23D
++#define TAPAN_A_CDC_DEBUG_B1_CTL           0x278
++#define TAPAN_A_CDC_DEBUG_B2_CTL           0x279
++#define TAPAN_A_CDC_DEBUG_B3_CTL           0x27A
++#define TAPAN_A_CDC_DEBUG_B4_CTL           0x27B
++#define TAPAN_A_CDC_DEBUG_B5_CTL           0x27C
++#define TAPAN_A_CDC_DEBUG_B6_CTL           0x27D
++#define TAPAN_A_CDC_DEBUG_B7_CTL           0x27E
++#define TAPAN_A_CDC_SRC1_PDA_CFG           0x2A0
++#define TAPAN_A_CDC_SRC2_PDA_CFG           0x2A8
++#define TAPAN_A_CDC_SRC1_FS_CTL            0x2A1
++#define TAPAN_A_CDC_SRC2_FS_CTL            0x2A9
++#define TAPAN_A_CDC_RX1_B1_CTL             0x2B0
++#define TAPAN_A_CDC_RX2_B1_CTL             0x2B8
++#define TAPAN_A_CDC_RX3_B1_CTL             0x2C0
++#define TAPAN_A_CDC_RX4_B1_CTL             0x2C8
++#define TAPAN_A_CDC_RX1_B2_CTL             0x2B1
++#define TAPAN_A_CDC_RX2_B2_CTL             0x2B9
++#define TAPAN_A_CDC_RX3_B2_CTL             0x2C1
++#define TAPAN_A_CDC_RX4_B2_CTL             0x2C9
++#define TAPAN_A_CDC_RX1_B3_CTL             0x2B2
++#define TAPAN_A_CDC_RX2_B3_CTL             0x2BA
++#define TAPAN_A_CDC_RX3_B3_CTL             0x2C2
++#define TAPAN_A_CDC_RX4_B3_CTL             0x2CA
++#define TAPAN_A_CDC_RX1_B4_CTL             0x2B3
++#define TAPAN_A_CDC_RX2_B4_CTL             0x2BB
++#define TAPAN_A_CDC_RX3_B4_CTL             0x2C3
++#define TAPAN_A_CDC_RX4_B4_CTL             0x2CB
++#define TAPAN_A_CDC_RX1_B5_CTL             0x2B4
++#define TAPAN_A_CDC_RX2_B5_CTL             0x2BC
++#define TAPAN_A_CDC_RX3_B5_CTL             0x2C4
++#define TAPAN_A_CDC_RX4_B5_CTL             0x2CC
++#define TAPAN_A_CDC_RX1_B6_CTL             0x2B5
++#define TAPAN_A_CDC_RX2_B6_CTL             0x2BD
++#define TAPAN_A_CDC_RX3_B6_CTL             0x2C5
++#define TAPAN_A_CDC_RX4_B6_CTL             0x2CD
++#define TAPAN_A_CDC_RX1_VOL_CTL_B1_CTL     0x2B6
++#define TAPAN_A_CDC_RX2_VOL_CTL_B1_CTL     0x2BE
++#define TAPAN_A_CDC_RX3_VOL_CTL_B1_CTL     0x2C6
++#define TAPAN_A_CDC_RX4_VOL_CTL_B1_CTL     0x2CE
++#define TAPAN_A_CDC_RX1_VOL_CTL_B2_CTL     0x2B7
++#define TAPAN_A_CDC_RX2_VOL_CTL_B2_CTL     0x2BF
++#define TAPAN_A_CDC_RX3_VOL_CTL_B2_CTL     0x2C7
++#define TAPAN_A_CDC_RX4_VOL_CTL_B2_CTL     0x2CF
++#define TAPAN_A_CDC_CLK_ANC_RESET_CTL      0x300
++#define TAPAN_A_CDC_CLK_RX_RESET_CTL       0x301
++#define TAPAN_A_CDC_CLK_TX_RESET_B1_CTL    0x302
++#define TAPAN_A_CDC_CLK_TX_RESET_B2_CTL    0x303
++#define TAPAN_A_CDC_CLK_DMIC_B1_CTL        0x304
++#define TAPAN_A_CDC_CLK_DMIC_B2_CTL        0x305
++#define TAPAN_A_CDC_CLK_I2S_CTL            0x306
++#define TAPAN_A_CDC_CLK_OTHR_RESET_B1_CTL  0x308
++#define TAPAN_A_CDC_CLK_OTHR_RESET_B2_CTL  0x309
++#define TAPAN_A_CDC_CLK_TX_CLK_EN_B1_CTL   0x30A
++#define TAPAN_A_CDC_CLK_TX_CLK_EN_B2_CTL   0x30B
++#define TAPAN_A_CDC_CLK_OTHR_CTL           0x30C
++#define TAPAN_A_CDC_CLK_RDAC_CLK_EN_CTL    0x30D
++#define TAPAN_A_CDC_CLK_ANC_CLK_EN_CTL     0x30E
++#define TAPAN_A_CDC_CLK_RX_B1_CTL          0x30F
++#define TAPAN_A_CDC_CLK_RX_B2_CTL          0x310
++#define TAPAN_A_CDC_CLK_MCLK_CTL           0x311
++#define TAPAN_A_CDC_CLK_PDM_CTL            0x312
++#define TAPAN_A_CDC_CLK_SD_CTL             0x313
++#define TAPAN_A_CDC_CLK_POWER_CTL          0x314
++#define TAPAN_A_CDC_CLSH_B1_CTL            0x320
++#define TAPAN_A_CDC_CLSH_B2_CTL            0x321
++#define TAPAN_A_CDC_CLSH_B3_CTL            0x322
++#define TAPAN_A_CDC_CLSH_BUCK_NCP_VARS     0x323
++#define TAPAN_A_CDC_CLSH_IDLE_HPH_THSD     0x324
++#define TAPAN_A_CDC_CLSH_IDLE_EAR_THSD     0x325
++#define TAPAN_A_CDC_CLSH_FCLKONLY_HPH_THSD 0x326
++#define TAPAN_A_CDC_CLSH_FCLKONLY_EAR_THSD 0x327
++#define TAPAN_A_CDC_CLSH_K_ADDR            0x328
++#define TAPAN_A_CDC_CLSH_K_DATA            0x329
++#define TAPAN_A_CDC_CLSH_I_PA_FACT_HPH_L   0x32A
++#define TAPAN_A_CDC_CLSH_I_PA_FACT_HPH_U   0x32B
++#define TAPAN_A_CDC_CLSH_I_PA_FACT_EAR_L   0x32C
++#define TAPAN_A_CDC_CLSH_I_PA_FACT_EAR_U   0x32D
++#define TAPAN_A_CDC_CLSH_V_PA_HD_EAR       0x32E
++#define TAPAN_A_CDC_CLSH_V_PA_HD_HPH       0x32F
++#define TAPAN_A_CDC_CLSH_V_PA_MIN_EAR      0x330
++#define TAPAN_A_CDC_CLSH_V_PA_MIN_HPH      0x331
++#define TAPAN_A_CDC_IIR1_GAIN_B1_CTL       0x340
++#define TAPAN_A_CDC_IIR2_GAIN_B1_CTL       0x350
++#define TAPAN_A_CDC_IIR1_GAIN_B2_CTL       0x341
++#define TAPAN_A_CDC_IIR2_GAIN_B2_CTL       0x351
++#define TAPAN_A_CDC_IIR1_GAIN_B3_CTL       0x342
++#define TAPAN_A_CDC_IIR2_GAIN_B3_CTL       0x352
++#define TAPAN_A_CDC_IIR1_GAIN_B4_CTL       0x343
++#define TAPAN_A_CDC_IIR2_GAIN_B4_CTL       0x353
++#define TAPAN_A_CDC_IIR1_GAIN_B5_CTL       0x344
++#define TAPAN_A_CDC_IIR2_GAIN_B5_CTL       0x354
++#define TAPAN_A_CDC_IIR1_GAIN_B6_CTL       0x345
++#define TAPAN_A_CDC_IIR2_GAIN_B6_CTL       0x355
++#define TAPAN_A_CDC_IIR1_GAIN_B7_CTL       0x346
++#define TAPAN_A_CDC_IIR2_GAIN_B7_CTL       0x356
++#define TAPAN_A_CDC_IIR1_GAIN_B8_CTL       0x347
++#define TAPAN_A_CDC_IIR2_GAIN_B8_CTL       0x357
++#define TAPAN_A_CDC_IIR1_CTL               0x348
++#define TAPAN_A_CDC_IIR2_CTL               0x358
++#define TAPAN_A_CDC_IIR1_GAIN_TIMER_CTL    0x349
++#define TAPAN_A_CDC_IIR2_GAIN_TIMER_CTL    0x359
++#define TAPAN_A_CDC_IIR1_COEF_B1_CTL       0x34A
++#define TAPAN_A_CDC_IIR2_COEF_B1_CTL       0x35A
++#define TAPAN_A_CDC_IIR1_COEF_B2_CTL       0x34B
++#define TAPAN_A_CDC_IIR2_COEF_B2_CTL       0x35B
++#define TAPAN_A_CDC_TOP_GAIN_UPDATE        0x360
++#define TAPAN_A_CDC_COMP0_B1_CTL           0x368
++#define TAPAN_A_CDC_COMP1_B1_CTL           0x370
++#define TAPAN_A_CDC_COMP2_B1_CTL           0x378
++#define TAPAN_A_CDC_COMP0_B2_CTL           0x369
++#define TAPAN_A_CDC_COMP1_B2_CTL           0x371
++#define TAPAN_A_CDC_COMP2_B2_CTL           0x379
++#define TAPAN_A_CDC_COMP0_B3_CTL           0x36A
++#define TAPAN_A_CDC_COMP1_B3_CTL           0x372
++#define TAPAN_A_CDC_COMP2_B3_CTL           0x37A
++#define TAPAN_A_CDC_COMP0_B4_CTL           0x36B
++#define TAPAN_A_CDC_COMP1_B4_CTL           0x373
++#define TAPAN_A_CDC_COMP2_B4_CTL           0x37B
++#define TAPAN_A_CDC_COMP0_B5_CTL           0x36C
++#define TAPAN_A_CDC_COMP1_B5_CTL           0x374
++#define TAPAN_A_CDC_COMP2_B5_CTL           0x37C
++#define TAPAN_A_CDC_COMP0_B6_CTL           0x36D
++#define TAPAN_A_CDC_COMP1_B6_CTL           0x375
++#define TAPAN_A_CDC_COMP2_B6_CTL           0x37D
++#define TAPAN_A_CDC_COMP0_SHUT_DOWN_STATUS 0x36E
++#define TAPAN_A_CDC_COMP1_SHUT_DOWN_STATUS 0x376
++#define TAPAN_A_CDC_COMP2_SHUT_DOWN_STATUS 0x37E
++#define TAPAN_A_CDC_COMP0_FS_CFG           0x36F
++#define TAPAN_A_CDC_COMP1_FS_CFG           0x377
++#define TAPAN_A_CDC_COMP2_FS_CFG           0x37F
++#define TAPAN_A_CDC_CONN_RX1_B1_CTL        0x380
++#define TAPAN_A_CDC_CONN_RX1_B2_CTL        0x381
++#define TAPAN_A_CDC_CONN_RX1_B3_CTL        0x382
++#define TAPAN_A_CDC_CONN_RX2_B1_CTL        0x383
++#define TAPAN_A_CDC_CONN_RX2_B2_CTL        0x384
++#define TAPAN_A_CDC_CONN_RX2_B3_CTL        0x385
++#define TAPAN_A_CDC_CONN_RX3_B1_CTL        0x386
++#define TAPAN_A_CDC_CONN_RX3_B2_CTL        0x387
++#define TAPAN_A_CDC_CONN_RX4_B1_CTL        0x388
++#define TAPAN_A_CDC_CONN_RX4_B2_CTL        0x389
++#define TAPAN_A_CDC_CONN_RX4_B3_CTL        0x38A
++#define TAPAN_A_CDC_CONN_ANC_B1_CTL        0x391
++#define TAPAN_A_CDC_CONN_ANC_B2_CTL        0x392
++#define TAPAN_A_CDC_CONN_TX_B1_CTL         0x393
++#define TAPAN_A_CDC_CONN_TX_B2_CTL         0x394
++#define TAPAN_A_CDC_CONN_TX_B3_CTL         0x395
++#define TAPAN_A_CDC_CONN_TX_B4_CTL         0x396
++#define TAPAN_A_CDC_CONN_EQ1_B1_CTL        0x397
++#define TAPAN_A_CDC_CONN_EQ1_B2_CTL        0x398
++#define TAPAN_A_CDC_CONN_EQ1_B3_CTL        0x399
++#define TAPAN_A_CDC_CONN_EQ1_B4_CTL        0x39A
++#define TAPAN_A_CDC_CONN_EQ2_B1_CTL        0x39B
++#define TAPAN_A_CDC_CONN_EQ2_B2_CTL        0x39C
++#define TAPAN_A_CDC_CONN_EQ2_B3_CTL        0x39D
++#define TAPAN_A_CDC_CONN_EQ2_B4_CTL        0x39E
++#define TAPAN_A_CDC_CONN_SRC1_B1_CTL       0x39F
++#define TAPAN_A_CDC_CONN_SRC1_B2_CTL       0x3A0
++#define TAPAN_A_CDC_CONN_SRC2_B1_CTL       0x3A1
++#define TAPAN_A_CDC_CONN_SRC2_B2_CTL       0x3A2
++#define TAPAN_A_CDC_CONN_TX_SB_B1_CTL      0x3A3
++#define TAPAN_A_CDC_CONN_TX_SB_B2_CTL      0x3A4
++#define TAPAN_A_CDC_CONN_TX_SB_B3_CTL      0x3A5
++#define TAPAN_A_CDC_CONN_TX_SB_B4_CTL      0x3A6
++#define TAPAN_A_CDC_CONN_TX_SB_B5_CTL      0x3A7
++#define TAPAN_A_CDC_CONN_TX_SB_B11_CTL     0x3AD
++#define TAPAN_A_CDC_CONN_RX_SB_B1_CTL      0x3AE
++#define TAPAN_A_CDC_CONN_RX_SB_B2_CTL      0x3AF
++#define TAPAN_A_CDC_CONN_CLSH_CTL          0x3B0
++#define TAPAN_A_CDC_CONN_MISC              0x3B1
++#define TAPAN_A_CDC_MBHC_EN_CTL            0x3C0
++#define TAPAN_A_CDC_MBHC_FIR_B1_CFG        0x3C1
++#define TAPAN_A_CDC_MBHC_FIR_B2_CFG        0x3C2
++#define TAPAN_A_CDC_MBHC_TIMER_B1_CTL      0x3C3
++#define TAPAN_A_CDC_MBHC_TIMER_B2_CTL      0x3C4
++#define TAPAN_A_CDC_MBHC_TIMER_B3_CTL      0x3C5
++#define TAPAN_A_CDC_MBHC_TIMER_B4_CTL      0x3C6
++#define TAPAN_A_CDC_MBHC_TIMER_B5_CTL      0x3C7
++#define TAPAN_A_CDC_MBHC_TIMER_B6_CTL      0x3C8
++#define TAPAN_A_CDC_MBHC_B1_STATUS         0x3C9
++#define TAPAN_A_CDC_MBHC_B2_STATUS         0x3CA
++#define TAPAN_A_CDC_MBHC_B3_STATUS         0x3CB
++#define TAPAN_A_CDC_MBHC_B4_STATUS         0x3CC
++#define TAPAN_A_CDC_MBHC_B5_STATUS         0x3CD
++#define TAPAN_A_CDC_MBHC_B1_CTL            0x3CE
++#define TAPAN_A_CDC_MBHC_B2_CTL            0x3CF
++#define TAPAN_A_CDC_MBHC_VOLT_B1_CTL       0x3D0
++#define TAPAN_A_CDC_MBHC_VOLT_B2_CTL       0x3D1
++#define TAPAN_A_CDC_MBHC_VOLT_B3_CTL       0x3D2
++#define TAPAN_A_CDC_MBHC_VOLT_B4_CTL       0x3D3
++#define TAPAN_A_CDC_MBHC_VOLT_B5_CTL       0x3D4
++#define TAPAN_A_CDC_MBHC_VOLT_B6_CTL       0x3D5
++#define TAPAN_A_CDC_MBHC_VOLT_B7_CTL       0x3D6
++#define TAPAN_A_CDC_MBHC_VOLT_B8_CTL       0x3D7
++#define TAPAN_A_CDC_MBHC_VOLT_B9_CTL       0x3D8
++#define TAPAN_A_CDC_MBHC_VOLT_B10_CTL      0x3D9
++#define TAPAN_A_CDC_MBHC_VOLT_B11_CTL      0x3DA
++#define TAPAN_A_CDC_MBHC_VOLT_B12_CTL      0x3DB
++#define TAPAN_A_CDC_MBHC_CLK_CTL           0x3DC
++#define TAPAN_A_CDC_MBHC_INT_CTL           0x3DD
++#define TAPAN_A_CDC_MBHC_DEBUG_CTL         0x3DE
++#define TAPAN_A_CDC_MBHC_SPARE             0x3DF
++
++/* SLIMbus interface device (IFD) registers */
++#define TAPAN_SLIM_PGD_PORT_INT_EN0        0x30
++#define TAPAN_SLIM_PGD_PORT_INT_STATUS_RX_0 0x34
++#define TAPAN_SLIM_PGD_PORT_INT_STATUS_RX_1 0x35
++#define TAPAN_SLIM_PGD_PORT_INT_STATUS_TX_0 0x36
++#define TAPAN_SLIM_PGD_PORT_INT_STATUS_TX_1 0x37
++#define TAPAN_SLIM_PGD_PORT_INT_CLR_RX_0   0x38
++#define TAPAN_SLIM_PGD_PORT_INT_CLR_RX_1   0x39
++#define TAPAN_SLIM_PGD_PORT_INT_CLR_TX_0   0x3A
++#define TAPAN_SLIM_PGD_PORT_INT_CLR_TX_1   0x3B
++#define TAPAN_SLIM_PGD_PORT_INT_RX_SOURCE0 0x60
++#define TAPAN_SLIM_PGD_PORT_INT_TX_SOURCE0 0x70
++
++#define TAPAN_NUM_REGISTERS	0x400
++#define TAPAN_MAX_REGISTER	(TAPAN_NUM_REGISTERS - 1)
++
++extern const u8 wcd9306_reg_readable[TAPAN_NUM_REGISTERS];
++
++#endif /* __WCD9306_H__ */
+-- 
+2.43.0
+

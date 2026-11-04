@@ -1,0 +1,52 @@
+From 9326f5835807ab93fd75c2f5072b316a902fc6c8 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:31:55 -0300
+Subject: [PATCH 6/6] ASoC: qcom: msm8226: front-ends antes dos back-ends
+
+Os componentes sao sondados na ordem dos dai-links. Se um back-end vem
+primeiro, o q6routing e sondado antes do q6asm-dai e as rotas dele para
+MM_DLx/MM_ULx falham (-ENODEV, placa nao instancia). O fdtoverlay
+inverte os subnos do no sound, entao a ordem no DT nao serve: o parse
+agora poe os links sem codec (front-ends) primeiro.
+---
+ sound/soc/qcom/msm8226.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/sound/soc/qcom/msm8226.c b/sound/soc/qcom/msm8226.c
+index 2787bcc0f..0e0457e66 100644
+--- a/sound/soc/qcom/msm8226.c
++++ b/sound/soc/qcom/msm8226.c
+@@ -206,7 +206,7 @@ static int msm8226_parse_of(struct snd_soc_card *card)
+ 	struct snd_soc_dai_link *link;
+ 	struct snd_soc_dai_link_component *dlc;
+ 	struct of_phandle_args args;
+-	int ret, num_links;
++	int ret, num_links, pass;
+ 
+ 	ret = snd_soc_of_parse_card_name(card, "model");
+ 	if (ret)
+@@ -228,11 +228,21 @@ static int msm8226_parse_of(struct snd_soc_card *card)
+ 	card->num_links = num_links;
+ 	link = card->dai_link;
+ 
++	/*
++	 * Front-ends (sem no codec) primeiro, back-ends depois, qualquer que
++	 * seja a ordem no DT (o fdtoverlay inverte os subnos). Os componentes
++	 * sao sondados na ordem dos links, e as rotas do q6routing precisam
++	 * dos widgets MM_DLx/MM_ULx do q6asm-dai ja criados.
++	 */
++	for (pass = 0; pass < 2; pass++)
+ 	for_each_available_child_of_node_scoped(dev->of_node, np) {
+ 		struct device_node *cpu __free(device_node) = of_get_child_by_name(np, "cpu");
+ 		struct device_node *platform __free(device_node) = of_get_child_by_name(np, "platform");
+ 		struct device_node *codec __free(device_node) = of_get_child_by_name(np, "codec");
+ 
++		if (!!codec != pass)
++			continue;
++
+ 		dlc = devm_kcalloc(dev, 2, sizeof(*dlc), GFP_KERNEL);
+ 		if (!dlc)
+ 			return -ENOMEM;
+-- 
+2.43.0
+

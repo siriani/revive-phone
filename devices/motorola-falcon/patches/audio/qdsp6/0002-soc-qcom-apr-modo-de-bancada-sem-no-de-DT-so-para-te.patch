@@ -1,0 +1,241 @@
+From 833e5742ec2ddb33a4eb6c1b3bdc88bda977396d Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:11:47 -0300
+Subject: [PATCH 2/6] soc: qcom: apr: modo de bancada sem no de DT (so para
+ teste)
+
+O kernel do aparelho (pmOS, 6.16.12) nao tem OF_DYNAMIC, entao o no do
+APR so entra trocando o DTB. Para provar o QDSP6 antes disso:
+
+- apr: parametro sem_dt (padrao 0). Com sem_dt=1 o driver se liga ao
+  canal SMD apr_audio_svc pelo nome, usa o dominio ADSP e registra os
+  servicos fixos core/afe/asm/adm; esses servicos casam com os drivers
+  pelo compatible "qcom,<nome>".
+- q6afe/q6asm/q6adm: sem no de DT nao chamam devm_of_platform_populate()
+  (com no NULL ele popularia a raiz do DT).
+- q6asm-dai: sem no de DT registra MultiMedia1 (reproducao) e
+  MultiMedia2 (captura).
+
+Com o no no DT nada muda. Nao e para upstream.
+---
+ drivers/soc/qcom/apr.c           | 75 +++++++++++++++++++++++++++++---
+ sound/soc/qcom/qdsp6/q6adm.c     |  4 ++
+ sound/soc/qcom/qdsp6/q6afe.c     |  4 ++
+ sound/soc/qcom/qdsp6/q6asm-dai.c | 18 ++++++++
+ sound/soc/qcom/qdsp6/q6asm.c     |  4 ++
+ 5 files changed, 100 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/soc/qcom/apr.c b/drivers/soc/qcom/apr.c
+index a956c407c..48aa37072 100644
+--- a/drivers/soc/qcom/apr.c
++++ b/drivers/soc/qcom/apr.c
+@@ -14,6 +14,29 @@
+ #include <linux/soc/qcom/pdr.h>
+ #include <linux/rpmsg.h>
+ #include <linux/of.h>
++#include <dt-bindings/soc/qcom,apr.h>
++
++/*
++ * Modo de bancada: o kernel do aparelho nao tem OF_DYNAMIC, entao nao da
++ * para acrescentar o no "qcom,apr-v2" sem trocar o DTB. Com sem_dt=1 o
++ * driver se liga ao canal SMD "apr_audio_svc" do ADSP mesmo sem no de DT e
++ * registra os servicos fixos do QDSP6 (core, AFE, ASM, ADM). Esses servicos
++ * casam com os drivers pelo compatible "qcom,<nome>". Desligado por padrao;
++ * com o no no DT nada muda.
++ */
++static bool sem_dt;
++module_param(sem_dt, bool, 0444);
++MODULE_PARM_DESC(sem_dt, "bancada: usa o canal apr_audio_svc sem no de DT");
++
++static const struct {
++	u32 svc_id;
++	const char *name;
++} apr_svcs_sem_dt[] = {
++	{ APR_SVC_ADSP_CORE, "q6core" },
++	{ APR_SVC_AFE, "q6afe" },
++	{ APR_SVC_ASM, "q6asm" },
++	{ APR_SVC_ADM, "q6adm" },
++};
+ 
+ enum {
+ 	PR_TYPE_APR = 0,
+@@ -348,6 +371,16 @@ static int apr_device_match(struct device *dev, const struct device_driver *drv)
+ 	if (of_driver_match_device(dev, drv))
+ 		return 1;
+ 
++	/* bancada: servico sem no de DT casa pelo compatible "qcom,<nome>" */
++	if (!dev->of_node && adev->name[0] && drv->of_match_table) {
++		const struct of_device_id *m;
++
++		for (m = drv->of_match_table; m->compatible[0]; m++)
++			if (!strncmp(m->compatible, "qcom,", 5) &&
++			    !strcmp(m->compatible + 5, adev->name))
++				return 1;
++	}
++
+ 	if (!id)
+ 		return 0;
+ 
+@@ -409,7 +442,7 @@ const struct bus_type aprbus = {
+ EXPORT_SYMBOL_GPL(aprbus);
+ 
+ static int apr_add_device(struct device *dev, struct device_node *np,
+-			  u32 svc_id, u32 domain_id)
++			  const char *name, u32 svc_id, u32 domain_id)
+ {
+ 	struct packet_router *apr = dev_get_drvdata(dev);
+ 	struct apr_device *adev = NULL;
+@@ -433,6 +466,8 @@ static int apr_add_device(struct device *dev, struct device_node *np,
+ 
+ 	if (np)
+ 		snprintf(adev->name, APR_NAME_SIZE, "%pOFn", np);
++	else if (name)
++		strscpy(adev->name, name, APR_NAME_SIZE);
+ 
+ 	switch (apr->type) {
+ 	case PR_TYPE_APR:
+@@ -555,7 +590,7 @@ static void of_register_apr_devices(struct device *dev, const char *svc_path)
+ 
+ 		domain_id = apr->dest_domain_id;
+ 
+-		if (apr_add_device(dev, node, svc_id, domain_id))
++		if (apr_add_device(dev, node, NULL, svc_id, domain_id))
+ 			dev_err(dev, "Failed to add apr %d svc\n", svc_id);
+ 	}
+ }
+@@ -598,9 +633,21 @@ static int apr_probe(struct rpmsg_device *rpdev)
+ 	if (!apr)
+ 		return -ENOMEM;
+ 
+-	ret = of_property_read_u32(dev->of_node, "qcom,domain", &apr->dest_domain_id);
++	if (!dev->of_node) {
++		if (!sem_dt)
++			return -ENODEV;
++		dev_info(dev, "sem no de DT: modo de bancada, dominio ADSP\n");
++		apr->dest_domain_id = APR_DOMAIN_ADSP;
++		apr->type = PR_TYPE_APR;
++		ret = 0;
++	} else {
++		ret = of_property_read_u32(dev->of_node, "qcom,domain",
++					   &apr->dest_domain_id);
++	}
+ 
+-	if (of_device_is_compatible(dev->of_node, "qcom,gpr")) {
++	if (!dev->of_node) {
++		/* tipo e dominio ja definidos acima */
++	} else if (of_device_is_compatible(dev->of_node, "qcom,gpr")) {
+ 		apr->type = PR_TYPE_GPR;
+ 	} else {
+ 		if (ret) /* try deprecated apr-domain property */
+@@ -640,7 +687,18 @@ static int apr_probe(struct rpmsg_device *rpdev)
+ 	if (ret)
+ 		goto handle_release;
+ 
+-	of_register_apr_devices(dev, NULL);
++	if (dev->of_node) {
++		of_register_apr_devices(dev, NULL);
++	} else {
++		int i;
++
++		for (i = 0; i < ARRAY_SIZE(apr_svcs_sem_dt); i++)
++			if (apr_add_device(dev, NULL, apr_svcs_sem_dt[i].name,
++					   apr_svcs_sem_dt[i].svc_id,
++					   apr->dest_domain_id))
++				dev_err(dev, "Failed to add apr %d svc\n",
++					apr_svcs_sem_dt[i].svc_id);
++	}
+ 
+ 	return 0;
+ 
+@@ -697,7 +755,14 @@ static const struct of_device_id pkt_router_of_match[] = {
+ };
+ MODULE_DEVICE_TABLE(of, pkt_router_of_match);
+ 
++/* so usado com sem_dt=1; sem MODULE_DEVICE_TABLE para nao carregar sozinho */
++static const struct rpmsg_device_id apr_sem_dt_ids[] = {
++	{ .name = "apr_audio_svc" },
++	{ }
++};
++
+ static struct rpmsg_driver packet_router_driver = {
++	.id_table = apr_sem_dt_ids,
+ 	.probe = apr_probe,
+ 	.remove = apr_remove,
+ 	.callback = apr_callback,
+diff --git a/sound/soc/qcom/qdsp6/q6adm.c b/sound/soc/qcom/qdsp6/q6adm.c
+index 1530e98df..aa0a5f3a2 100644
+--- a/sound/soc/qcom/qdsp6/q6adm.c
++++ b/sound/soc/qcom/qdsp6/q6adm.c
+@@ -601,6 +601,10 @@ static int q6adm_probe(struct apr_device *adev)
+ 	INIT_LIST_HEAD(&adm->copps_list);
+ 	spin_lock_init(&adm->copps_list_lock);
+ 
++	/* sem no de DT (modo de bancada do apr) nao ha filhos a criar */
++	if (!dev->of_node)
++		return 0;
++
+ 	return devm_of_platform_populate(dev);
+ }
+ 
+diff --git a/sound/soc/qcom/qdsp6/q6afe.c b/sound/soc/qcom/qdsp6/q6afe.c
+index 7b59d514b..f37bfda7a 100644
+--- a/sound/soc/qcom/qdsp6/q6afe.c
++++ b/sound/soc/qcom/qdsp6/q6afe.c
+@@ -1936,6 +1936,10 @@ static int q6afe_probe(struct apr_device *adev)
+ 
+ 	dev_set_drvdata(dev, afe);
+ 
++	/* sem no de DT (modo de bancada do apr) nao ha filhos a criar */
++	if (!dev->of_node)
++		return 0;
++
+ 	return devm_of_platform_populate(dev);
+ }
+ 
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index a400c9a31..89b453a70 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -1240,6 +1240,24 @@ static int of_q6asm_parse_dai_data(struct device *dev,
+ 	int ret, id, dir, idx = 0;
+ 
+ 
++	if (!dev->of_node) {
++		/*
++		 * Bancada (apr com sem_dt=1, sem no de DT): MultiMedia1 so
++		 * reproducao e MultiMedia2 so captura, sem compress.
++		 */
++		pdata->num_dais = 2;
++		pdata->dais = devm_kcalloc(dev, pdata->num_dais,
++					   sizeof(*dai_drv), GFP_KERNEL);
++		if (!pdata->dais)
++			return -ENOMEM;
++		memset(&empty_stream, 0, sizeof(empty_stream));
++		pdata->dais[0] = q6asm_fe_dais_template[0];
++		pdata->dais[0].capture = empty_stream;
++		pdata->dais[1] = q6asm_fe_dais_template[1];
++		pdata->dais[1].playback = empty_stream;
++		return 0;
++	}
++
+ 	pdata->num_dais = of_get_child_count(dev->of_node);
+ 	if (!pdata->num_dais) {
+ 		dev_err(dev, "No dais found in DT\n");
+diff --git a/sound/soc/qcom/qdsp6/q6asm.c b/sound/soc/qcom/qdsp6/q6asm.c
+index 06a802f9d..146f25a59 100644
+--- a/sound/soc/qcom/qdsp6/q6asm.c
++++ b/sound/soc/qcom/qdsp6/q6asm.c
+@@ -1728,6 +1728,10 @@ static int q6asm_probe(struct apr_device *adev)
+ 	spin_lock_init(&q6asm->slock);
+ 	dev_set_drvdata(dev, q6asm);
+ 
++	/* sem no de DT (modo de bancada do apr) nao ha filhos a criar */
++	if (!dev->of_node)
++		return 0;
++
+ 	return devm_of_platform_populate(dev);
+ }
+ 
+-- 
+2.43.0
+

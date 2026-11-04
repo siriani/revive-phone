@@ -1,0 +1,219 @@
+From 54b510bdb7aae1ad986a608be154439f547f2867 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:11:48 -0300
+Subject: [PATCH 4/6] ARM: dts: qcom: msm8226-motorola-falcon: audio pelo ADSP
+ e WCD9306
+
+- qcom-msm8226: no do APR no smd-edge lpass (canal apr_audio_svc,
+  servicos core/afe/asm/adm), interface device do tapan (ifd@0,0) e
+  rotulo wcd9306 no codec;
+- falcon: NGD habilitado, codec com reset (TLMM 72), MCLK do div_clk1
+  do RPM pelo PM8226 GPIO1 (func1, 9,6 MHz pelo divisor /2 do PMIC),
+  reguladores como no downstream (s4, l25, l6, l4), EXT_VDD_SPKR no
+  PM8226 GPIO2 e a placa de som MultiMedia1 -> SLIMBUS_0_RX -> WCD9306.
+---
+ .../boot/dts/qcom/msm8226-motorola-falcon.dts | 85 +++++++++++++++++++
+ arch/arm/boot/dts/qcom/qcom-msm8226.dtsi      | 70 ++++++++++++++-
+ 2 files changed, 154 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/qcom/msm8226-motorola-falcon.dts b/arch/arm/boot/dts/qcom/msm8226-motorola-falcon.dts
+index 0fd2d1c28..3dc84f619 100644
+--- a/arch/arm/boot/dts/qcom/msm8226-motorola-falcon.dts
++++ b/arch/arm/boot/dts/qcom/msm8226-motorola-falcon.dts
+@@ -17,6 +17,53 @@ aliases {
+ 		mmc0 = &sdhc_1;
+ 	};
+ 
++	/*
++	 * MCLK do WCD9306: div_clk1 do RPM (downstream "osr_clk"). O clkdiv1
++	 * do PM8226 divide o XO por 2 (DIV_CTL1 = 0x02), entao o pino sai a
++	 * 9,6 MHz enquanto o clk-smd-rpm declara 19,2 MHz.
++	 */
++	cdc_mclk: clock-cdc-mclk {
++		compatible = "fixed-factor-clock";
++		clocks = <&rpmcc RPM_SMD_DIV_CLK1>;
++		clock-div = <2>;
++		clock-mult = <1>;
++		#clock-cells = <0>;
++		clock-output-names = "cdc_mclk";
++	};
++
++	sound {
++		compatible = "qcom,msm8226-sndcard";
++		model = "falcon";
++		pinctrl-0 = <&spkr_vdd_default>;
++		pinctrl-names = "default";
++		spkr-vdd-gpios = <&pm8226_gpios 2 GPIO_ACTIVE_HIGH>;
++		audio-routing = "SPK_OUT", "EXT_VDD_SPKR";
++
++		mm1-dai-link {
++			link-name = "MultiMedia1";
++
++			cpu {
++				sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
++			};
++		};
++
++		slim-rx-dai-link {
++			link-name = "SLIMBUS_0_RX";
++
++			cpu {
++				sound-dai = <&q6afedai SLIMBUS_0_RX>;
++			};
++
++			platform {
++				sound-dai = <&q6routing>;
++			};
++
++			codec {
++				sound-dai = <&wcd9306 0>;
++			};
++		};
++	};
++
+ 	chosen {
+ 		#address-cells = <1>;
+ 		#size-cells = <1>;
+@@ -642,3 +689,41 @@ &adsp {
+ 	firmware-name = "qcom/msm8226/motorola/falcon/adsp.mdt";
+ 	status = "okay";
+ };
++
++&pm8226_gpios {
++	/* downstream: saida, src-sel 2 (func1 = DIV_CLK1), vin-sel 2, out-strength 3 */
++	cdc_mclk_default: cdc-mclk-state {
++		pins = "gpio1";
++		function = "func1";
++		output-low;
++		power-source = <2>;
++		qcom,drive-strength = <3>;
++		bias-disable;
++	};
++
++	spkr_vdd_default: spkr-vdd-state {
++		pins = "gpio2";
++		function = "normal";
++		output-low;
++		power-source = <2>;
++		qcom,drive-strength = <3>;
++		bias-disable;
++	};
++};
++
++&slim_ngd {
++	status = "okay";
++};
++
++&wcd9306 {
++	reset-gpios = <&tlmm 72 GPIO_ACTIVE_LOW>;
++	clocks = <&cdc_mclk>;
++	clock-names = "mclk";
++	pinctrl-0 = <&cdc_mclk_default>;
++	pinctrl-names = "default";
++	vdd-buck-supply = <&pm8226_s4>;
++	vdd-buckhelper-supply = <&pm8226_l25>;
++	vdd-h-supply = <&pm8226_l6>;
++	vdd-px-supply = <&pm8226_l6>;
++	vdd-cx-supply = <&pm8226_l4>;
++};
+diff --git a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+index 39a2805f6..14075a8df 100644
+--- a/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
++++ b/arch/arm/boot/dts/qcom/qcom-msm8226.dtsi
+@@ -10,6 +10,9 @@
+ #include <dt-bindings/clock/qcom,gcc-msm8974.h>
+ #include <dt-bindings/clock/qcom,mmcc-msm8974.h>
+ #include <dt-bindings/clock/qcom,rpmcc.h>
++#include <dt-bindings/soc/qcom,apr.h>
++#include <dt-bindings/sound/qcom,q6afe.h>
++#include <dt-bindings/sound/qcom,q6asm.h>
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/power/qcom-rpmpd.h>
+ #include <dt-bindings/reset/qcom,gcc-msm8974.h>
+@@ -1488,6 +1491,63 @@ smd-edge {
+ 				qcom,smd-edge = <1>;
+ 
+ 				label = "lpass";
++
++				apr {
++					compatible = "qcom,apr-v2";
++					qcom,smd-channels = "apr_audio_svc";
++					qcom,domain = <APR_DOMAIN_ADSP>;
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					service@3 {
++						compatible = "qcom,q6core";
++						reg = <APR_SVC_ADSP_CORE>;
++					};
++
++					service@4 {
++						compatible = "qcom,q6afe";
++						reg = <APR_SVC_AFE>;
++
++						q6afedai: dais {
++							compatible = "qcom,q6afe-dais";
++							#address-cells = <1>;
++							#size-cells = <0>;
++							#sound-dai-cells = <1>;
++						};
++					};
++
++					service@7 {
++						compatible = "qcom,q6asm";
++						reg = <APR_SVC_ASM>;
++
++						q6asmdai: dais {
++							compatible = "qcom,q6asm-dais";
++							#address-cells = <1>;
++							#size-cells = <0>;
++							#sound-dai-cells = <1>;
++
++							dai@0 {
++								reg = <0>;
++								direction = <Q6ASM_DAI_RX>;
++							};
++
++							dai@1 {
++								reg = <1>;
++								direction = <Q6ASM_DAI_TX>;
++							};
++						};
++					};
++
++					service@8 {
++						compatible = "qcom,q6adm";
++						reg = <APR_SVC_ADM>;
++
++						q6routing: routing {
++							compatible = "qcom,q6adm-routing";
++							#sound-dai-cells = <0>;
++						};
++					};
++				};
+ 			};
+ 		};
+ 
+@@ -1509,10 +1569,18 @@ slim@1 {
+ 				#address-cells = <2>;
+ 				#size-cells = <0>;
+ 
++				/* interface device do tapan: EA 00 00 e0 00 17 02 */
++				wcd9306_ifd: ifd@0,0 {
++					compatible = "slim217,e0";
++					reg = <0 0>;
++				};
++
+ 				/* WCD9306 (tapan): EA downstream 00 01 e0 00 17 02 */
+-				codec@1,0 {
++				wcd9306: codec@1,0 {
+ 					compatible = "slim217,e0";
+ 					reg = <1 0>;
++					slim-ifc-dev = <&wcd9306_ifd>;
++					#sound-dai-cells = <1>;
+ 				};
+ 			};
+ 		};
+-- 
+2.43.0
+

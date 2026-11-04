@@ -1,0 +1,60 @@
+From beede24427fe26a728b2eb5040fde68d2163b739 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:11:47 -0300
+Subject: [PATCH 1/6] ASoC: qcom: qdsp6: q6core: registra as versoes do AVCS no
+ log
+
+O ADSP do MSM8226 (firmware Motorola do falcon) nao conhece o
+AVCS_CMD_GET_FWK_VERSION (responde ADSP_EUNSUPPORTED) e responde ao
+AVCS_GET_VERSIONS com 11 servicos. Registra no log a resposta basica, o
+build e a lista de servicos/versoes, para diagnostico do firmware.
+---
+ sound/soc/qcom/qdsp6/q6core.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/sound/soc/qcom/qdsp6/q6core.c b/sound/soc/qcom/qdsp6/q6core.c
+index 49cfb32cd..493ce89bc 100644
+--- a/sound/soc/qcom/qdsp6/q6core.c
++++ b/sound/soc/qcom/qdsp6/q6core.c
+@@ -77,6 +77,8 @@ static int q6core_callback(struct apr_device *adev, struct apr_resp_pkt *data)
+ 	switch (hdr->opcode) {
+ 	case APR_BASIC_RSP_RESULT:{
+ 		result = data->payload;
++		dev_info(&adev->dev, "resposta basica: cmd 0x%x status 0x%x\n",
++			 result->opcode, result->status);
+ 		switch (result->opcode) {
+ 		case AVCS_GET_VERSIONS:
+ 			if (result->status == ADSP_EUNSUPPORTED)
+@@ -111,6 +113,11 @@ static int q6core_callback(struct apr_device *adev, struct apr_resp_pkt *data)
+ 		core->fwk_version_supported = true;
+ 		core->resp_received = true;
+ 
++		dev_info(&adev->dev, "AVCS fwk %u.%u.%u.%u, %u servicos\n",
++			 fwk->build_major_version, fwk->build_minor_version,
++			 fwk->build_branch_version,
++			 fwk->build_subbranch_version, fwk->num_services);
++
+ 		break;
+ 	}
+ 	case AVCS_GET_VERSIONS_RSP: {
+@@ -128,6 +135,17 @@ static int q6core_callback(struct apr_device *adev, struct apr_resp_pkt *data)
+ 		core->get_version_supported = true;
+ 		core->resp_received = true;
+ 
++		{
++			u32 i;
++
++			dev_info(&adev->dev, "AVCS versoes: build 0x%x, %u servicos\n",
++				 v->build_id, v->num_services);
++			for (i = 0; i < v->num_services; i++)
++				dev_info(&adev->dev, "  servico 0x%x versao 0x%x\n",
++					 v->svc_api_info[i].service_id,
++					 v->svc_api_info[i].version);
++		}
++
+ 		break;
+ 	}
+ 	case AVCS_CMDRSP_ADSP_EVENT_GET_STATE:
+-- 
+2.43.0
+

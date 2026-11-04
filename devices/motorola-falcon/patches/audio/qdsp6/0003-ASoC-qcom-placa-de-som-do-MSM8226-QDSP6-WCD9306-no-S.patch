@@ -1,0 +1,428 @@
+From b0de89fb168c5fea44d2cbc81f08dd70f0606523 Mon Sep 17 00:00:00 2001
+From: Allan Siriani <allan@fatecpompeia.edu.br>
+Date: Wed, 4 Nov 2026 16:11:48 -0300
+Subject: [PATCH 3/6] ASoC: qcom: placa de som do MSM8226 (QDSP6 + WCD9306 no
+ SLIMbus)
+
+Machine driver para o MSM8226 (Moto G falcon), baseado no apq8096 e no
+sdm845: front-ends do q6asm, back-ends SLIMbus do q6afe, q6routing no
+meio (DPCM).
+
+- canais SLIMbus do tapan como no msm8226.c do downstream: RX 144..148,
+  TX 128..132 (set_channel_map no codec no init do back-end; no
+  hw_params o mapa ativo do codec vai para a porta AFE);
+- back-end fixo em 48 kHz S16_LE, 1 canal por padrao (controles
+  "SLIM_0_RX Channels"/"SLIM_0_TX Channels", como no downstream);
+- widget EXT_VDD_SPKR ligado ao spkr-vdd-gpios (PM8226 GPIO2);
+- sysclk do codec em 9,6 MHz (MCLK do tapan);
+- parametro sem_codec para provar o caminho do ADSP com o codec dummy.
+---
+ sound/soc/qcom/Kconfig   |  11 ++
+ sound/soc/qcom/Makefile  |   2 +
+ sound/soc/qcom/msm8226.c | 352 +++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 365 insertions(+)
+ create mode 100644 sound/soc/qcom/msm8226.c
+
+diff --git a/sound/soc/qcom/Kconfig b/sound/soc/qcom/Kconfig
+index 3d9ba13ee..f4fc163b1 100644
+--- a/sound/soc/qcom/Kconfig
++++ b/sound/soc/qcom/Kconfig
+@@ -156,6 +156,17 @@ config SND_SOC_QDSP6
+ 	 audio drivers. This includes q6asm, q6adm,
+ 	 q6afe interfaces to DSP using apr.
+ 
++config SND_SOC_MSM8226
++	tristate "SoC Machine driver for MSM8226 boards"
++	depends on QCOM_APR
++	depends on COMMON_CLK
++	select SND_SOC_QDSP6
++	help
++	  Support for the MSM8226 boards (e.g. Motorola Moto G "falcon")
++	  with the WCD9306 codec on SLIMbus and audio routed through the
++	  QDSP6 (APR) on the ADSP.
++	  Say Y or M if you want to use audio on these boards.
++
+ config SND_SOC_MSM8996
+ 	tristate "SoC Machine driver for MSM8996 and APQ8096 boards"
+ 	depends on QCOM_APR
+diff --git a/sound/soc/qcom/Makefile b/sound/soc/qcom/Makefile
+index 985ce2ae2..ce47837d0 100644
+--- a/sound/soc/qcom/Makefile
++++ b/sound/soc/qcom/Makefile
+@@ -21,6 +21,7 @@ obj-$(CONFIG_SND_SOC_LPASS_SC7280) += snd-soc-lpass-sc7280.o
+ # Machine
+ snd-soc-storm-y := storm.o
+ snd-soc-apq8016-sbc-y := apq8016_sbc.o
++snd-soc-msm8226-y := msm8226.o
+ snd-soc-apq8096-y := apq8096.o
+ snd-soc-sc7180-y := sc7180.o
+ snd-soc-sc7280-y := sc7280.o
+@@ -34,6 +35,7 @@ snd-soc-qcom-offload-utils-objs := usb_offload_utils.o
+ 
+ obj-$(CONFIG_SND_SOC_STORM) += snd-soc-storm.o
+ obj-$(CONFIG_SND_SOC_APQ8016_SBC) += snd-soc-apq8016-sbc.o
++obj-$(CONFIG_SND_SOC_MSM8226) += snd-soc-msm8226.o
+ obj-$(CONFIG_SND_SOC_MSM8996) += snd-soc-apq8096.o
+ obj-$(CONFIG_SND_SOC_SC7180) += snd-soc-sc7180.o
+ obj-$(CONFIG_SND_SOC_SC7280) += snd-soc-sc7280.o
+diff --git a/sound/soc/qcom/msm8226.c b/sound/soc/qcom/msm8226.c
+new file mode 100644
+index 000000000..2787bcc0f
+--- /dev/null
++++ b/sound/soc/qcom/msm8226.c
+@@ -0,0 +1,352 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Placa de som do MSM8226 (ex.: Motorola Moto G "falcon"): ADSP (QDSP6 via
++ * APR) + codec WCD9306 (tapan) no SLIMbus.
++ *
++ * Baseado em apq8096.c e sdm845.c. Front-ends sao DAIs do q6asm, back-ends
++ * sao portas SLIMbus do q6afe ligadas ao codec, com o q6routing no meio
++ * (DPCM). O codec segue a interface do wcd9335: set_channel_map recebe os
++ * canais SLIMbus (RX 144..148, TX 128..132, como o msm8226.c do downstream)
++ * e get_channel_map devolve os canais que o mixer do codec ligou.
++ *
++ * Copyright (c) 2026 Allan Siriani <allan@fatecpompeia.edu.br>
++ */
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <dt-bindings/sound/qcom,q6afe.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++
++#define MSM8226_TAPAN_MCLK_RATE	9600000
++#define MSM8226_SLIM_MAX_CH	16
++
++static bool sem_codec;
++module_param(sem_codec, bool, 0444);
++MODULE_PARM_DESC(sem_codec,
++		 "teste: liga os back-ends SLIMbus ao codec dummy (so o caminho do ADSP)");
++
++/* tapan (downstream msm8226.c): RX1..RX5 e TX1..TX5 */
++static const unsigned int msm8226_rx_ch[] = { 144, 145, 146, 147, 148 };
++static const unsigned int msm8226_tx_ch[] = { 128, 129, 130, 131, 132 };
++
++struct msm8226_snd_data {
++	struct gpio_desc *spkr_vdd;
++	unsigned int slim0_rx_ch;
++	unsigned int slim0_tx_ch;
++};
++
++static const char *const msm8226_ch_text[] = { "One", "Two" };
++static SOC_ENUM_SINGLE_EXT_DECL(msm8226_rx_ch_enum, msm8226_ch_text);
++static SOC_ENUM_SINGLE_EXT_DECL(msm8226_tx_ch_enum, msm8226_ch_text);
++
++static unsigned int *msm8226_ch_ptr(struct snd_kcontrol *kc)
++{
++	struct snd_soc_card *card = snd_kcontrol_chip(kc);
++	struct msm8226_snd_data *data = snd_soc_card_get_drvdata(card);
++
++	if (kc->private_value == (unsigned long)&msm8226_tx_ch_enum)
++		return &data->slim0_tx_ch;
++	return &data->slim0_rx_ch;
++}
++
++static int msm8226_ch_get(struct snd_kcontrol *kc, struct snd_ctl_elem_value *uc)
++{
++	uc->value.enumerated.item[0] = *msm8226_ch_ptr(kc) - 1;
++	return 0;
++}
++
++static int msm8226_ch_put(struct snd_kcontrol *kc, struct snd_ctl_elem_value *uc)
++{
++	unsigned int v = uc->value.enumerated.item[0];
++	unsigned int *ch = msm8226_ch_ptr(kc);
++
++	if (v >= ARRAY_SIZE(msm8226_ch_text))
++		return -EINVAL;
++	if (*ch == v + 1)
++		return 0;
++	*ch = v + 1;
++	return 1;
++}
++
++#define MSM8226_CH_CTL(xname, xenum) {					\
++	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname,		\
++	.info = snd_soc_info_enum_double, .get = msm8226_ch_get,	\
++	.put = msm8226_ch_put,						\
++	.private_value = (unsigned long)&xenum }
++
++static struct snd_kcontrol_new msm8226_controls[] = {
++	MSM8226_CH_CTL("SLIM_0_RX Channels", msm8226_rx_ch_enum),
++	MSM8226_CH_CTL("SLIM_0_TX Channels", msm8226_tx_ch_enum),
++};
++
++static int msm8226_spkr_vdd_event(struct snd_soc_dapm_widget *w,
++				  struct snd_kcontrol *k, int event)
++{
++	struct msm8226_snd_data *data = snd_soc_card_get_drvdata(w->dapm->card);
++
++	if (!data->spkr_vdd)
++		return 0;
++
++	if (SND_SOC_DAPM_EVENT_ON(event)) {
++		gpiod_set_value_cansleep(data->spkr_vdd, 1);
++		usleep_range(5000, 6000);
++	} else {
++		gpiod_set_value_cansleep(data->spkr_vdd, 0);
++	}
++	return 0;
++}
++
++static const struct snd_soc_dapm_widget msm8226_widgets[] = {
++	/* downstream: "EXT_VDD_SPKR", PM8226 GPIO2 (cdc-vdd-spkr-gpios) */
++	SND_SOC_DAPM_SUPPLY("EXT_VDD_SPKR", SND_SOC_NOPM, 0, 0,
++			    msm8226_spkr_vdd_event,
++			    SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++};
++
++static int msm8226_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
++				      struct snd_pcm_hw_params *params)
++{
++	struct msm8226_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
++	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
++	struct snd_interval *rate = hw_param_interval(params, SNDRV_PCM_HW_PARAM_RATE);
++	struct snd_interval *ch = hw_param_interval(params, SNDRV_PCM_HW_PARAM_CHANNELS);
++	struct snd_mask *fmt = hw_param_mask(params, SNDRV_PCM_HW_PARAM_FORMAT);
++
++	rate->min = rate->max = 48000;
++	ch->min = ch->max = (cpu_dai->id & 1) ? data->slim0_tx_ch : data->slim0_rx_ch;
++	snd_mask_none(fmt);
++	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
++
++	return 0;
++}
++
++static int msm8226_slim_hw_params(struct snd_pcm_substream *substream,
++				  struct snd_pcm_hw_params *params)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
++	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
++	bool play = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
++	unsigned int rx[MSM8226_SLIM_MAX_CH], tx[MSM8226_SLIM_MAX_CH];
++	unsigned int rx_n = 0, tx_n = 0, n = params_channels(params), i;
++	int ret = -ENOTSUPP;
++
++	if (!sem_codec)
++		ret = snd_soc_dai_get_channel_map(codec_dai, &tx_n, tx, &rx_n, rx);
++
++	if (ret == -ENOTSUPP) {
++		/* sem mapa do codec: usa os primeiros canais do tapan */
++		if (n > ARRAY_SIZE(msm8226_rx_ch))
++			return -EINVAL;
++		for (i = 0; i < n; i++) {
++			rx[i] = msm8226_rx_ch[i];
++			tx[i] = msm8226_tx_ch[i];
++		}
++		rx_n = tx_n = n;
++	} else if (ret) {
++		dev_err(rtd->dev, "mapa de canais do codec: %d\n", ret);
++		return ret;
++	} else if ((play && !rx_n) || (!play && !tx_n)) {
++		dev_err(rtd->dev, "codec sem canal SLIMbus %s ligado (mixer do codec)\n",
++			play ? "RX" : "TX");
++		return -EINVAL;
++	}
++
++	if (play)
++		ret = snd_soc_dai_set_channel_map(cpu_dai, 0, NULL, rx_n, rx);
++	else
++		ret = snd_soc_dai_set_channel_map(cpu_dai, tx_n, tx, 0, NULL);
++	if (ret && ret != -ENOTSUPP) {
++		dev_err(rtd->dev, "mapa de canais da porta AFE: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static const struct snd_soc_ops msm8226_slim_ops = {
++	.hw_params = msm8226_slim_hw_params,
++};
++
++static int msm8226_be_init(struct snd_soc_pcm_runtime *rtd)
++{
++	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
++	int ret;
++
++	if (sem_codec)
++		return 0;
++
++	ret = snd_soc_dai_set_channel_map(codec_dai,
++					  ARRAY_SIZE(msm8226_tx_ch), msm8226_tx_ch,
++					  ARRAY_SIZE(msm8226_rx_ch), msm8226_rx_ch);
++	if (ret && ret != -ENOTSUPP)
++		return ret;
++
++	ret = snd_soc_dai_set_sysclk(codec_dai, 0, MSM8226_TAPAN_MCLK_RATE,
++				     SND_SOC_CLOCK_IN);
++	if (ret && ret != -ENOTSUPP)
++		return ret;
++
++	return 0;
++}
++
++/*
++ * Igual ao qcom_snd_parse_of() (sound/soc/qcom/common.c), com uma
++ * diferenca: com sem_codec=1 o no "codec" dos back-ends nao e lido (o
++ * codec pode nem ter driver ainda) e o dummy entra no lugar.
++ */
++static int msm8226_parse_of(struct snd_soc_card *card)
++{
++	struct device *dev = card->dev;
++	struct snd_soc_dai_link *link;
++	struct snd_soc_dai_link_component *dlc;
++	struct of_phandle_args args;
++	int ret, num_links;
++
++	ret = snd_soc_of_parse_card_name(card, "model");
++	if (ret)
++		return dev_err_probe(dev, ret, "model\n");
++
++	if (!sem_codec && of_property_present(dev->of_node, "audio-routing")) {
++		ret = snd_soc_of_parse_audio_routing(card, "audio-routing");
++		if (ret)
++			return ret;
++	}
++
++	num_links = of_get_available_child_count(dev->of_node);
++	if (!num_links)
++		return dev_err_probe(dev, -EINVAL, "nenhum dai-link no DT\n");
++
++	card->dai_link = devm_kcalloc(dev, num_links, sizeof(*link), GFP_KERNEL);
++	if (!card->dai_link)
++		return -ENOMEM;
++	card->num_links = num_links;
++	link = card->dai_link;
++
++	for_each_available_child_of_node_scoped(dev->of_node, np) {
++		struct device_node *cpu __free(device_node) = of_get_child_by_name(np, "cpu");
++		struct device_node *platform __free(device_node) = of_get_child_by_name(np, "platform");
++		struct device_node *codec __free(device_node) = of_get_child_by_name(np, "codec");
++
++		dlc = devm_kcalloc(dev, 2, sizeof(*dlc), GFP_KERNEL);
++		if (!dlc)
++			return -ENOMEM;
++		link->cpus = &dlc[0];
++		link->platforms = &dlc[1];
++		link->num_cpus = 1;
++		link->num_platforms = 1;
++
++		ret = of_property_read_string(np, "link-name", &link->name);
++		if (ret)
++			return dev_err_probe(dev, ret, "%pOF: link-name\n", np);
++		if (!cpu)
++			return dev_err_probe(dev, -EINVAL, "%s: sem no cpu\n", link->name);
++
++		ret = snd_soc_of_get_dlc(cpu, &args, link->cpus, 0);
++		if (ret)
++			return dev_err_probe(dev, ret, "%s: cpu dai\n", link->name);
++		link->id = args.args[0];
++
++		if (platform) {
++			link->platforms->of_node = of_parse_phandle(platform, "sound-dai", 0);
++			if (!link->platforms->of_node)
++				return dev_err_probe(dev, -EINVAL, "%s: platform\n", link->name);
++		} else {
++			link->platforms->of_node = link->cpus->of_node;
++		}
++
++		if (codec && !sem_codec) {
++			ret = snd_soc_of_get_dai_link_codecs(dev, codec, link);
++			if (ret < 0)
++				return dev_err_probe(dev, ret, "%s: codec dai\n", link->name);
++		} else {
++			link->codecs = &snd_soc_dummy_dlc;
++			link->num_codecs = 1;
++		}
++
++		if (codec && platform) {
++			/* back-end DPCM: porta do q6afe */
++			link->no_pcm = 1;
++			link->ignore_pmdown_time = 1;
++			link->be_hw_params_fixup = msm8226_be_hw_params_fixup;
++			link->init = msm8226_be_init;
++			link->ops = &msm8226_slim_ops;
++		} else if (!codec) {
++			/* front-end DPCM: DAI do q6asm */
++			link->dynamic = 1;
++		}
++
++		if (platform || !codec) {
++			link->ignore_suspend = 1;
++			link->nonatomic = 1;
++		}
++
++		link->stream_name = link->name;
++		link++;
++	}
++
++	return 0;
++}
++
++static int msm8226_snd_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct msm8226_snd_data *data;
++	struct snd_soc_card *card;
++	int ret;
++
++	card = devm_kzalloc(dev, sizeof(*card), GFP_KERNEL);
++	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
++	if (!card || !data)
++		return -ENOMEM;
++
++	/* downstream: SLIM_0_RX/TX com 1 canal por padrao */
++	data->slim0_rx_ch = 1;
++	data->slim0_tx_ch = 1;
++
++	data->spkr_vdd = devm_gpiod_get_optional(dev, "spkr-vdd", GPIOD_OUT_LOW);
++	if (IS_ERR(data->spkr_vdd))
++		return dev_err_probe(dev, PTR_ERR(data->spkr_vdd), "spkr-vdd-gpios\n");
++
++	card->dev = dev;
++	card->owner = THIS_MODULE;
++	card->driver_name = "msm8226";
++	card->dapm_widgets = msm8226_widgets;
++	card->num_dapm_widgets = ARRAY_SIZE(msm8226_widgets);
++	card->controls = msm8226_controls;
++	card->num_controls = ARRAY_SIZE(msm8226_controls);
++	snd_soc_card_set_drvdata(card, data);
++
++	ret = msm8226_parse_of(card);
++	if (ret)
++		return ret;
++
++	if (sem_codec)
++		dev_warn(dev, "sem_codec=1: back-ends ligados ao codec dummy (sem som)\n");
++
++	return devm_snd_soc_register_card(dev, card);
++}
++
++static const struct of_device_id msm8226_snd_of_match[] = {
++	{ .compatible = "qcom,msm8226-sndcard" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, msm8226_snd_of_match);
++
++static struct platform_driver msm8226_snd_driver = {
++	.probe = msm8226_snd_probe,
++	.driver = {
++		.name = "msm8226-snd",
++		.of_match_table = msm8226_snd_of_match,
++	},
++};
++module_platform_driver(msm8226_snd_driver);
++
++MODULE_AUTHOR("Allan Siriani <allan@fatecpompeia.edu.br>");
++MODULE_DESCRIPTION("Placa de som do MSM8226 (QDSP6 + WCD9306 no SLIMbus)");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+
