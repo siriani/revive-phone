@@ -14,7 +14,7 @@ use crate::{clima, i18n, inicio, loja, mesh, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppLojaUi, AppOrdem, MsgMesh, NoMesh, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppLojaUi, AppOrdem, MsgMesh, NoMesh, SecaoSobre, ItemSobre, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -35,6 +35,7 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("doom", "DOOM II", "☠", (150, 30, 20)),
     ("mesh", "Mesh", "◉", (30, 120, 70)),
     ("loja", "Loja", "↓", (40, 110, 90)),
+    ("sobre", "Sobre", "ⓘ", (60, 70, 110)),
     ("ajustes", "Ajustes", "⚙", (70, 74, 84)),
 ];
 
@@ -594,6 +595,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     }
     if tela == "mesh" {
         abrir_mesh(ui);
+    }
+    if tela == "sobre" {
+        abrir_sobre(ui);
     }
     if tela == "loja" {
         abrir_loja(ui);
@@ -1567,6 +1571,37 @@ fn loja_acao(ui: &AppWindow, instalar: bool) {
             }
         });
     });
+}
+
+/// Tela "Sobre o sistema": coleta em segundo plano; o resumo da CPU atualiza a cada 2 s.
+fn abrir_sobre(ui: &AppWindow) {
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let s = crate::sobre::coletar();
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            let v: Vec<SecaoSobre> = s
+                .into_iter()
+                .map(|x| SecaoSobre {
+                    titulo: ss(x.titulo),
+                    itens: ModelRc::new(VecModel::from(
+                        x.itens.into_iter().map(|i| ItemSobre { rotulo: ss(i.rotulo), valor: ss(i.valor) }).collect::<Vec<_>>(),
+                    )),
+                })
+                .collect();
+            ui.set_sobre_secoes(ModelRc::new(VecModel::from(v)));
+        });
+    });
+    let fraca = ui.as_weak();
+    let t = slint::Timer::default();
+    t.start(slint::TimerMode::Repeated, Duration::from_secs(2), move || {
+        if let Some(ui) = fraca.upgrade() {
+            if ui.get_tela() == "sobre" {
+                ui.set_sobre_cpu(ss(crate::sobre::cpu_resumo()));
+            }
+        }
+    });
+    std::mem::forget(t);
+    ui.set_sobre_cpu(ss(crate::sobre::cpu_resumo()));
 }
 
 /// Apps nativos e de manifesto, na ordem padrão.

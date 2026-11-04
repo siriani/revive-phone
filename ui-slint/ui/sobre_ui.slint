@@ -1,0 +1,263 @@
+// Revive: tela "Sobre o sistema" (Slint + Material 3). Paisagem 1280x720, renderizador
+// por software. Seções à esquerda; à direita os itens da seção selecionada num Flickable,
+// com o valor quebrando linha e a linha crescendo com o texto.
+// Fontes só 24/26px (e 26px negrito nos caracteres embutidos).
+
+import { AppBar } from "@material";
+import { Tema } from "tema.slint";
+
+export struct ItemSobre { rotulo: string, valor: string }
+export struct SecaoSobre { titulo: string, itens: [ItemSobre] }
+
+// Botão de ícone próprio (mesmo desenho das outras telas), 72x72 com ícone tingido.
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    in property <bool> ativo: true;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : #00000000;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.ativo ? root.cor : root.cor.with-alpha(0.3);
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.ativo;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Chip do resumo ao vivo da CPU: pílula com contorno, ícone 28px + texto 24px.
+component ChipCpu inherits Rectangle {
+    in property <string> texto;
+    callback clicado();
+
+    width: 488px;
+    height: 48px;
+    border-radius: 24px;
+    border-width: 1px;
+    border-color: Tema.contorno;
+    background: toque.pressed ? Tema.superficie-alta : Tema.superficie;
+    clip: true;
+
+    Image {
+        x: 18px;
+        y: 10px;
+        width: 28px;
+        height: 28px;
+        source: @image-url("icones/settings.svg");
+        colorize: Tema.destaque;
+        image-fit: contain;
+    }
+
+    Text {
+        x: 58px;
+        y: 0px;
+        width: 412px;
+        height: 48px;
+        text: root.texto;
+        font-size: 24px;
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Pílula da lista de seções; a selecionada usa o destaque suave do tema.
+component PilulaSecao inherits Rectangle {
+    in property <string> titulo;
+    in property <bool> ativa: false;
+    callback clicado();
+
+    width: 268px;
+    height: 64px;
+    border-radius: 32px;
+    background: root.ativa ? Tema.destaque-suave
+                : (toque.pressed ? Tema.superficie : #00000000);
+    clip: true;
+
+    Text {
+        x: 20px;
+        y: 0px;
+        width: 228px;
+        height: 64px;
+        text: root.titulo;
+        font-size: 26px;
+        color: root.ativa ? Tema.sobre-destaque-suave : Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Linha de item: rótulo 24px (300px) e valor 26px com quebra de linha (632px).
+// A altura cresce com o texto do valor; o divisor de 1px fica no pé da linha.
+component LinhaSobre inherits Rectangle {
+    in property <string> rotulo;
+    in property <string> valor;
+    in property <bool> divisor: true;
+
+    // estimativa conservadora de linhas (34 caracteres por linha em 632px a 26px)
+    pure function linhas(v: string) -> int {
+        return max(1, ceil(v.character-count / 34.0));
+    }
+
+    width: 948px;
+    height: max(64px, 32px + linhas(root.valor) * 34px);
+    background: #00000000;
+
+    Text {
+        x: 0px;
+        y: 12px;
+        width: 300px;
+        height: 40px;
+        text: root.rotulo;
+        font-size: 24px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 316px;
+        y: 14px;
+        width: 632px;
+        height: root.height - 28px;
+        text: root.valor;
+        font-size: 26px;
+        color: Tema.texto;
+        wrap: word-wrap;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        x: 0px;
+        y: root.height - 1px;
+        width: root.width;
+        height: 1px;
+        background: Tema.contorno;
+        visible: root.divisor;
+    }
+}
+
+// ---------------------------------------------------------------- sobre
+
+export component TelaSobre inherits Rectangle {
+    in property <[SecaoSobre]> secoes;
+    in property <string> cpu;
+
+    callback voltar();
+    callback copiar();
+
+    property <int> atual: 0;
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    changed secoes => {
+        if root.atual >= root.secoes.length { root.atual = 0; }
+    }
+
+    // barra superior (y 0, altura 96)
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: @tr("Sobre o sistema");
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    // chip do resumo ao vivo (ao toque, copia o resumo)
+    ChipCpu {
+        x: 776px;
+        y: 24px;
+        texto: root.cpu;
+        clicado => { root.copiar(); }
+    }
+
+    // ------------------------------------------ coluna esquerda (x 0..300)
+    Flickable {
+        x: 0px;
+        y: 120px;
+        width: 300px;
+        height: 584px;
+        interactive: true;
+        content-width: self.width;
+        content-height: max(self.height, root.secoes.length * 72px);
+
+        for s[i] in root.secoes : PilulaSecao {
+            x: 16px;
+            y: i * 72px;
+            titulo: s.titulo;
+            ativa: i == root.atual;
+            clicado => { root.atual = i; }
+        }
+    }
+
+    // ------------------------------------------ coluna direita (x 316..1264)
+    if root.secoes.length > 0 : Flickable {
+        x: 316px;
+        y: 120px;
+        width: 948px;
+        height: 584px;
+        interactive: true;
+        content-width: self.width;
+        content-height: max(self.height, pilha.preferred-height);
+
+        // empilha as linhas; cada uma calcula a própria altura pelo texto do valor
+        pilha := VerticalLayout {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            spacing: 0px;
+            alignment: start;
+
+            for it[j] in root.secoes[root.atual].itens : LinhaSobre {
+                rotulo: it.rotulo;
+                valor: it.valor;
+                divisor: j < root.secoes[root.atual].itens.length - 1;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos para os textos dinâmicos (seções, rótulos, valores e cpu).
+    Text { x: 0px; y: 0px; visible: false; text: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç ·°%-:/,.()[]_=+—×…"; font-size: 24px; }
+    Text { x: 0px; y: 0px; visible: false; text: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç ·°%-:/,.()[]_=+—×…"; font-size: 26px; }
+    Text { x: 0px; y: 0px; visible: false; text: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç ·°%-:/,.()[]_=+—×…"; font-size: 26px; font-family: "DejaVu Sans Bold"; }
+}

@@ -7,6 +7,7 @@ export { HoraClima, MoedaMini } from "painel_ui.slint";
 export { HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 export { AppLojaUi } from "loja_ui.slint";
 export { NoMesh, MsgMesh } from "mesh_ui.slint";
+export { SecaoSobre, ItemSobre } from "sobre_ui.slint";
 export { AppOrdem } from "inicio_ui.slint";
 
 // ícones do clima por nome (o Rust escolhe o nome; as imagens vêm embutidas)
@@ -30,6 +31,7 @@ import { PainelMat, HoraClima, MoedaMini } from "painel_ui.slint";
 import { TelaClima, TelaCidade, HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 import { TelaLoja, TelaAppLoja, AppLojaUi } from "loja_ui.slint";
 import { TelaMesh, NoMesh, MsgMesh } from "mesh_ui.slint";
+import { TelaSobre, SecaoSobre, ItemSobre } from "sobre_ui.slint";
 import { TelaOrganizar, BotaoEditarInicio, AppOrdem } from "inicio_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
@@ -989,7 +991,7 @@ export component AppWindow inherits Window {
     out property <string> caracteres-embutidos:
         "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
         + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●"
-        + "◷≋✱⚙☁✉★⌂☀☠◉";  // ícones dos apps (vêm do Rust, não estão em literais)
+        + "◷≋✱⚙☁✉★⌂☀☠◉ⓘ";  // ícones dos apps (vêm do Rust, não estão em literais)
 
     in-out property <string> tela: "inicio";
     in property <[AppInfo]> apps;
@@ -1165,6 +1167,8 @@ export component AppWindow inherits Window {
     callback mesh-digitar();
     callback mesh-enviar();
     callback mesh-configurar();
+    in property <[SecaoSobre]> sobre-secoes;
+    in property <string> sobre-cpu;
     // organizar início
     in property <[AppOrdem]> org-apps;
     callback org-alternar(int);
@@ -1243,6 +1247,10 @@ export component AppWindow inherits Window {
             digitar => { root.mesh-digitar(); }
             enviar => { root.mesh-enviar(); }
             configurar => { root.mesh-configurar(); }
+        }
+        if root.tela == "sobre": TelaSobre {
+            width: 1280px; height: 720px; secoes: root.sobre-secoes; cpu: root.sobre-cpu;
+            voltar => { root.ir("inicio"); }
         }
         if root.tela == "loja": TelaLoja {
             width: 1280px; height: 720px; apps: root.loja-apps; mensagem: root.loja-msg;

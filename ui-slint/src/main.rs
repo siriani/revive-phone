@@ -16,6 +16,7 @@ mod manifesto;
 mod mesh;
 mod musica;
 mod sistema;
+mod sobre;
 mod tela;
 mod wad;
 mod telegram;
