@@ -7,8 +7,28 @@
 //! multiplanar (V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 1 plano); o caso de 1 plano só
 //! (VIDEO_CAPTURE) também é tratado, decidido pelo VIDIOC_QUERYCAP.
 //!
-//! A thread de captura converte cada quadro para RGB pela metade (1288x968 -> 644x484,
-//! um macropixel = um ponto) e deixa o último num "slot"; a interface é avisada por
+//! SEGURANÇA (causa dos reinícios secos do aparelho): o RDI do camss usa o write master
+//! em modo "frame based" e o driver NÃO programa tamanho nem stride para ele: o hardware
+//! escreve tudo o que o sensor manda, sem limite, a partir do endereço do buffer. E o driver
+//! só passa ao hardware o endereço do PRIMEIRO segmento do scatter-gather do buffer
+//! (videobuf2-dma-sg, sem IOMMU); como o vb2 aloca em pedaços de ordem decrescente, o
+//! buffer quase nunca é contíguo, e o DMA passa do pedaço e escreve em memória que é de
+//! outros (corrupção, reset). Por isso aqui: (1) buffers de tamanho potência de 2 criados
+//! com VIDIOC_CREATE_BUFS (vb2 aloca de uma vez só, um pedaço, quando a ordem existe) e
+//! bem maiores que o quadro; (2) cada buffer é conferido em /proc/self/pagemap (todas as
+//! páginas físicas consecutivas) antes de qualquer QBUF; se não for contíguo, tenta de
+//! novo e depois cai para um quadro menor; (3) a última página de cada buffer é uma
+//! "guarda" (0xA5) conferida a cada quadro: se mudar, a captura é abortada.
+//!
+//! Ao sair TUDO é fechado: STREAMOFF, munmap, REQBUFS 0, close, `media-ctl -r` e
+//! `modprobe -r qcom_camss mt9m114` (o driver do kernel não solta o pipeline do media
+//! controller no STREAMOFF, porque o "pixel array" do mt9m114 não tem s_stream e o
+//! video_stop_streaming() desiste com -ENOIOCTLCMD; sem descarregar os módulos o próximo
+//! STREAMON dá EBUSY e `media-ctl -r` também). Cada abertura recarrega os módulos (estado
+//! limpo do VFE/sensor: sem os quadros de partida que escreviam além do tamanho).
+//!
+//! A thread de captura converte cada quadro para RGB pela metade (1280x960 -> 640x480,
+//! um macropixel = um ponto; sem escala depois na tela) e deixa o último num "slot"; a interface é avisada por
 //! `upgrade_in_event_loop` e pega o quadro. Enquanto a interface não pegou, os quadros
 //! seguintes nem são convertidos (a CPU não trabalha à toa). Fotos, erros e o aviso de
 //! "pronta" vão por um canal (mpsc).
@@ -19,12 +39,13 @@
 //!   faixa=limitada               limitada (BT.601 16-235) ou cheia (0-255)
 //!   girar=0                      0 ou 180
 //!   espelhar=0                   1 espelha na horizontal
-//!   largura=1288 / altura=968    formato pedido ao pipeline
-//!   altura_util=0                corta linhas vazias no pé (0 = detectar sozinho)
+//!   largura=1280 / altura=960    formato pedido ao pipeline (crop 1280x960 + compose do ifp;
+//!                                4:3, de 320x240 a 1280x960; se faltar memória contígua cai
+//!                                para 640x480 e 320x240)
 //!   sensor=mt9m114 ifp 3-0048    nome da entidade do sensor no media controller
 //!   media=/dev/media0            dispositivo do media controller
 //!   video=/dev/video0            nó de captura (padrão: o do msm_vfe0_video0, via media-ctl -e)
-//!   fps=12                       limite de quadros por segundo da pré-visualização
+//!   fps=10                       limite de quadros por segundo da pré-visualização
 
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -33,7 +54,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use slint::{Rgb8Pixel, SharedPixelBuffer};
@@ -109,8 +130,6 @@ pub struct Config {
     pub espelhar: bool,
     pub largura: u32,
     pub altura: u32,
-    /// 0 = detectar linhas vazias no pé da imagem
-    pub altura_util: u32,
     pub sensor: String,
     pub media: String,
     pub video: Option<String>,
@@ -125,13 +144,12 @@ impl Default for Config {
             faixa_cheia: false,
             girar180: false,
             espelhar: false,
-            largura: 1288,
-            altura: 968,
-            altura_util: 0,
+            largura: 1280,
+            altura: 960,
             sensor: "mt9m114 ifp 3-0048".into(),
             media: "/dev/media0".into(),
             video: None,
-            fps: 12,
+            fps: 10,
         }
     }
 }
@@ -154,9 +172,8 @@ pub fn config() -> Config {
             "faixa" => c.faixa_cheia = v == "cheia" || v == "full",
             "girar" => c.girar180 = v == "180",
             "espelhar" => c.espelhar = sim,
-            "largura" => c.largura = v.parse().unwrap_or(c.largura),
-            "altura" => c.altura = v.parse().unwrap_or(c.altura),
-            "altura_util" => c.altura_util = v.parse().unwrap_or(0),
+            "largura" => c.largura = v.parse::<u32>().unwrap_or(c.largura).clamp(320, 1280),
+            "altura" => c.altura = v.parse::<u32>().unwrap_or(c.altura).clamp(240, 960),
             "sensor" if !v.is_empty() => c.sensor = v.to_string(),
             "media" if !v.is_empty() => c.media = v.to_string(),
             "video" if !v.is_empty() => c.video = Some(v.to_string()),
@@ -164,7 +181,8 @@ pub fn config() -> Config {
             _ => {}
         }
     }
-    c.largura &= !1; // macropixel = 2 pontos
+    c.largura &= !7; // macropixel = 2 pontos; múltiplo de 8 para o scaler do ifp
+    c.altura &= !1;
     c
 }
 
@@ -177,6 +195,7 @@ const V4L2_FIELD_NONE: u32 = 1;
 const V4L2_CAP_VIDEO_CAPTURE: u32 = 0x0000_0001;
 const V4L2_CAP_VIDEO_CAPTURE_MPLANE: u32 = 0x0000_1000;
 const V4L2_CAP_DEVICE_CAPS: u32 = 0x8000_0000;
+const V4L2_BUF_FLAG_ERROR: u32 = 0x0000_0040;
 const VIDEO_MAX_PLANES: usize = 8;
 
 #[allow(dead_code)]
@@ -242,6 +261,20 @@ struct ReqBufs {
     reserved: [u8; 3],
 }
 
+/// struct v4l2_create_buffers (kernel 6.16: capabilities, flags, max_num_buffers, reserved[5]).
+#[allow(dead_code)]
+#[repr(C)]
+struct CriarBufs {
+    index: u32,
+    count: u32,
+    memory: u32,
+    format: Formato,
+    capabilities: u32,
+    flags: u32,
+    max_num_buffers: u32,
+    reserved: [u32; 5],
+}
+
 /// struct v4l2_plane (o union `m` tem o tamanho de unsigned long).
 #[allow(dead_code)]
 #[repr(C)]
@@ -294,6 +327,10 @@ struct Buffer {
 const _: () = assert!(size_of::<Formato>() == 208 && size_of::<Buffer>() == 88 && size_of::<Plano>() == 64);
 #[cfg(target_arch = "arm")]
 const _: () = assert!(size_of::<Formato>() == 204 && size_of::<Buffer>() == 80 && size_of::<Plano>() == 60);
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<CriarBufs>() == 256);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(size_of::<CriarBufs>() == 248);
 const _: () = assert!(size_of::<Capability>() == 104 && size_of::<ReqBufs>() == 20);
 
 const fn ioc(dir: u32, nr: u32, tamanho: usize) -> u32 {
@@ -305,6 +342,7 @@ const VIDIOC_QUERYCAP: u32 = ioc(LER, 0, size_of::<Capability>());
 const VIDIOC_G_FMT: u32 = ioc(LER | GRAVAR, 4, size_of::<Formato>());
 const VIDIOC_S_FMT: u32 = ioc(LER | GRAVAR, 5, size_of::<Formato>());
 const VIDIOC_REQBUFS: u32 = ioc(LER | GRAVAR, 8, size_of::<ReqBufs>());
+const VIDIOC_CREATE_BUFS: u32 = ioc(LER | GRAVAR, 92, size_of::<CriarBufs>());
 const VIDIOC_QUERYBUF: u32 = ioc(LER | GRAVAR, 9, size_of::<Buffer>());
 const VIDIOC_QBUF: u32 = ioc(LER | GRAVAR, 15, size_of::<Buffer>());
 const VIDIOC_DQBUF: u32 = ioc(LER | GRAVAR, 17, size_of::<Buffer>());
@@ -324,6 +362,64 @@ fn xioctl<T>(fd: RawFd, req: u32, arg: *mut T) -> std::io::Result<()> {
     }
 }
 
+/// Por que não deu para abrir a captura.
+enum Falha {
+    /// sem memória fisicamente contígua para os buffers neste tamanho: tentar um quadro menor
+    Memoria(String),
+    Outra(String),
+}
+
+const PAGINA: usize = 4096;
+const GUARDA: u8 = 0xA5;
+const NUM_BUFFERS: u32 = 3;
+/// quantas vezes tenta alocar buffers contíguos antes de desistir deste tamanho
+const TENTATIVAS_MEMORIA: usize = 6;
+
+/// Tamanho do buffer: potência de 2 (o vb2 aloca de uma vez, num pedaço só), com no mínimo
+/// 50% de folga sobre o quadro e 2 MiB (o hardware não conhece o tamanho do buffer).
+fn tamanho_buffer(quadro: usize) -> usize {
+    (quadro + quadro / 2).max(2 << 20).next_power_of_two()
+}
+
+/// Todas as páginas do mapa estão em endereços físicos consecutivos? (o driver só passa ao
+/// hardware o endereço da primeira). Precisa de root: sem PFN visível, nega.
+fn contiguo(pagemap: RawFd, p: *mut u8, len: usize) -> Result<bool, String> {
+    let n = len.div_ceil(PAGINA);
+    let mut primeiro = 0u64;
+    for i in 0..n {
+        // garante a página presente
+        unsafe { std::ptr::read_volatile(p.add(i * PAGINA)) };
+        let mut e = 0u64;
+        let off = ((p as usize / PAGINA + i) * 8) as libc::off_t;
+        let r = unsafe { libc::pread(pagemap, &mut e as *mut u64 as *mut libc::c_void, 8, off) };
+        if r != 8 {
+            return Err(format!("pagemap: {}", std::io::Error::last_os_error()));
+        }
+        if e >> 63 == 0 {
+            return Ok(false);
+        }
+        let pfn = e & ((1u64 << 55) - 1);
+        if pfn == 0 {
+            return Err("pagemap sem endereços físicos (precisa de root)".into());
+        }
+        if i == 0 {
+            primeiro = pfn;
+        } else if pfn != primeiro + i as u64 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Quadro devolvido pelo driver.
+struct Cheio {
+    i: usize,
+    ini: usize,
+    fim: usize,
+    /// o driver marcou erro (V4L2_BUF_FLAG_ERROR) ou veio incompleto
+    ruim: bool,
+}
+
 /// Nó de captura aberto, com os buffers mapeados. O Drop desliga tudo (STREAMOFF).
 struct Dispositivo {
     fd: RawFd,
@@ -334,6 +430,8 @@ struct Dispositivo {
     largura: usize,
     altura: usize,
     bpl: usize,
+    /// bytes de um quadro completo (sizeimage do driver)
+    quadro: usize,
     fourcc: u32,
 }
 
@@ -341,11 +439,12 @@ struct Dispositivo {
 unsafe impl Send for Dispositivo {}
 
 impl Dispositivo {
-    fn abrir(caminho: &str, c: &Config) -> Result<Self, String> {
-        let cpath = std::ffi::CString::new(caminho).map_err(|e| e.to_string())?;
+    fn abrir(caminho: &str, c: &Config, largura: u32, altura: u32) -> Result<Self, Falha> {
+        let outra = |e: String| Falha::Outra(e);
+        let cpath = std::ffi::CString::new(caminho).map_err(|e| outra(e.to_string()))?;
         let fd = unsafe { libc::open(cpath.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC) };
         if fd < 0 {
-            return Err(format!("{caminho}: {}", std::io::Error::last_os_error()));
+            return Err(outra(format!("{caminho}: {}", std::io::Error::last_os_error())));
         }
         let mut d = Dispositivo {
             fd,
@@ -356,19 +455,21 @@ impl Dispositivo {
             largura: 0,
             altura: 0,
             bpl: 0,
+            quadro: 0,
             fourcc: 0,
         };
+        let _ = c;
 
         // multiplanar ou não
         let mut cap: Capability = unsafe { std::mem::zeroed() };
-        xioctl(fd, VIDIOC_QUERYCAP, &mut cap).map_err(|e| format!("QUERYCAP: {e}"))?;
+        xioctl(fd, VIDIOC_QUERYCAP, &mut cap).map_err(|e| outra(format!("QUERYCAP: {e}")))?;
         let caps = if cap.capabilities & V4L2_CAP_DEVICE_CAPS != 0 { cap.device_caps } else { cap.capabilities };
         d.mplane = if caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE != 0 {
             true
         } else if caps & V4L2_CAP_VIDEO_CAPTURE != 0 {
             false
         } else {
-            return Err(format!("{caminho}: não é captura de vídeo (caps {caps:#x})"));
+            return Err(outra(format!("{caminho}: não é captura de vídeo (caps {caps:#x})")));
         };
         d.tipo = if d.mplane { V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE } else { V4L2_BUF_TYPE_VIDEO_CAPTURE };
 
@@ -376,21 +477,21 @@ impl Dispositivo {
         let mut f = Formato::novo(d.tipo);
         let pix = Ordem::Uyvy.fourcc();
         if d.mplane {
-            f.escrever(MP_LARGURA, c.largura);
-            f.escrever(MP_ALTURA, c.altura);
+            f.escrever(MP_LARGURA, largura);
+            f.escrever(MP_ALTURA, altura);
             f.escrever(MP_PIXFMT, pix);
             f.escrever(MP_FIELD, V4L2_FIELD_NONE);
             f.raw[MP_NUM_PLANOS] = 1;
         } else {
-            f.escrever(SP_LARGURA, c.largura);
-            f.escrever(SP_ALTURA, c.altura);
+            f.escrever(SP_LARGURA, largura);
+            f.escrever(SP_ALTURA, altura);
             f.escrever(SP_PIXFMT, pix);
             f.escrever(SP_FIELD, V4L2_FIELD_NONE);
         }
-        xioctl(fd, VIDIOC_S_FMT, &mut f).map_err(|e| format!("S_FMT: {e}"))?;
-        // o que vale é o que o driver devolve (bytesperline pode ter preenchimento)
+        xioctl(fd, VIDIOC_S_FMT, &mut f).map_err(|e| outra(format!("S_FMT: {e}")))?;
+        // o que vale é o que o driver devolve
         let mut f = Formato::novo(d.tipo);
-        xioctl(fd, VIDIOC_G_FMT, &mut f).map_err(|e| format!("G_FMT: {e}"))?;
+        xioctl(fd, VIDIOC_G_FMT, &mut f).map_err(|e| outra(format!("G_FMT: {e}")))?;
         let (w, h, fcc, bpl, tam) = if d.mplane {
             (f.ler(MP_LARGURA), f.ler(MP_ALTURA), f.ler(MP_PIXFMT), f.ler(MP_PLANO0_BPL), f.ler(MP_PLANO0_TAMANHO))
         } else {
@@ -399,57 +500,122 @@ impl Dispositivo {
         d.largura = (w & !1) as usize;
         d.altura = h as usize;
         d.fourcc = fcc;
+        // no modo RDI o hardware grava as linhas sem preenchimento: o stride real é largura*2
         d.bpl = if bpl as usize >= d.largura * 2 { bpl as usize } else { d.largura * 2 };
+        d.quadro = (tam as usize).max(d.bpl * d.altura);
         eprintln!(
             "câmera: {caminho} {} {w}x{h} {} bytesperline {bpl} sizeimage {tam}",
             if d.mplane { "MPLANE" } else { "1 plano" },
             fourcc_texto(fcc)
         );
-        if d.largura < 2 || d.altura < 2 {
-            return Err(format!("formato inválido {w}x{h}"));
+        if (w, h) != (largura, altura) {
+            return Err(outra(format!("o nó de captura devolveu {w}x{h}, pedi {largura}x{altura}")));
+        }
+        if d.largura < 2 || d.altura < 2 || d.quadro == 0 {
+            return Err(outra(format!("formato inválido {w}x{h}")));
         }
 
-        // buffers mmap
-        let mut req = ReqBufs { count: 4, tipo: d.tipo, memory: V4L2_MEMORY_MMAP, ..Default::default() };
-        xioctl(fd, VIDIOC_REQBUFS, &mut req).map_err(|e| format!("REQBUFS: {e}"))?;
-        if req.count < 2 {
-            return Err(format!("REQBUFS: só {} buffer(s)", req.count));
+        // buffers: criados de uma vez (CREATE_BUFS) com tamanho potência de 2 e conferidos
+        let pagemap = unsafe { libc::open(c"/proc/self/pagemap".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        if pagemap < 0 {
+            return Err(outra(format!("pagemap: {}", std::io::Error::last_os_error())));
         }
-        for i in 0..req.count {
-            let mut planos: [Plano; 1] = unsafe { std::mem::zeroed() };
-            let mut b = d.buffer_vazio(&mut planos);
-            b.index = i;
-            xioctl(fd, VIDIOC_QUERYBUF, &mut b).map_err(|e| format!("QUERYBUF {i}: {e}"))?;
-            let (tamanho, offset) = if d.mplane {
-                (planos[0].length as usize, planos[0].m as u32)
-            } else {
-                (b.length as usize, b.m as u32)
-            };
-            let p = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    tamanho,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    fd,
-                    offset as libc::off_t,
-                )
-            };
-            if p == libc::MAP_FAILED {
-                return Err(format!("mmap {i}: {}", std::io::Error::last_os_error()));
-            }
-            d.mapas.push((p as *mut u8, tamanho));
+        let r = d.alocar_buffers(&f, pagemap);
+        unsafe { libc::close(pagemap) };
+        r?;
+
+        // guarda no fim de cada buffer (o DMA não deve chegar ali)
+        for &(p, n) in &d.mapas {
+            unsafe { std::ptr::write_bytes(p.add(n - PAGINA), GUARDA, PAGINA) };
         }
         for i in 0..d.mapas.len() {
-            d.devolver(i as u32).map_err(|e| format!("QBUF {i}: {e}"))?;
+            d.devolver(i as u32).map_err(|e| outra(format!("QBUF {i}: {e}")))?;
         }
         let mut t = d.tipo as libc::c_int;
         xioctl(fd, VIDIOC_STREAMON, &mut t).map_err(|e| {
             // EPIPE aqui = formato do nó diferente do formato do pipeline
-            format!("STREAMON: {e}")
+            outra(format!("STREAMON: {e}"))
         })?;
         d.ligado = true;
         Ok(d)
+    }
+
+    /// CREATE_BUFS + mmap + conferência de contiguidade, com novas tentativas.
+    fn alocar_buffers(&mut self, f: &Formato, pagemap: RawFd) -> Result<(), Falha> {
+        let outra = |e: String| Falha::Outra(e);
+        let len = tamanho_buffer(self.quadro);
+        let mut ultimo = String::new();
+        for tentativa in 0..TENTATIVAS_MEMORIA {
+            if tentativa > 0 {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            let mut cb: CriarBufs = unsafe { std::mem::zeroed() };
+            cb.count = NUM_BUFFERS;
+            cb.memory = V4L2_MEMORY_MMAP;
+            cb.format = Formato { tipo: f.tipo, _alinhar: [], raw: f.raw };
+            // sizeimage pedido = tamanho do buffer (o driver aceita >= o do formato)
+            cb.format.escrever(if self.mplane { MP_PLANO0_TAMANHO } else { SP_TAMANHO }, len as u32);
+            xioctl(self.fd, VIDIOC_CREATE_BUFS, &mut cb).map_err(|e| outra(format!("CREATE_BUFS: {e}")))?;
+            if cb.count < 2 {
+                return Err(outra(format!("CREATE_BUFS: só {} buffer(s)", cb.count)));
+            }
+            let mut bom = true;
+            for i in 0..cb.count {
+                let mut planos: [Plano; 1] = unsafe { std::mem::zeroed() };
+                let mut b = self.buffer_vazio(&mut planos);
+                b.index = cb.index + i;
+                xioctl(self.fd, VIDIOC_QUERYBUF, &mut b).map_err(|e| outra(format!("QUERYBUF {i}: {e}")))?;
+                let (tamanho, offset) = if self.mplane {
+                    (planos[0].length as usize, planos[0].m as u32)
+                } else {
+                    (b.length as usize, b.m as u32)
+                };
+                let p = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        tamanho,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_SHARED,
+                        self.fd,
+                        offset as libc::off_t,
+                    )
+                };
+                if p == libc::MAP_FAILED {
+                    return Err(outra(format!("mmap {i}: {}", std::io::Error::last_os_error())));
+                }
+                self.mapas.push((p as *mut u8, tamanho));
+                if tamanho < len || tamanho < self.quadro + PAGINA {
+                    return Err(outra(format!("buffer {i} com {tamanho} bytes, pedi {len}")));
+                }
+                match contiguo(pagemap, p as *mut u8, tamanho) {
+                    Ok(true) => {}
+                    Ok(false) => bom = false,
+                    Err(e) => return Err(outra(e)),
+                }
+            }
+            if bom {
+                eprintln!("câmera: {} buffers de {} KiB, memória contígua conferida", self.mapas.len(), len >> 10);
+                return Ok(());
+            }
+            ultimo = format!("buffers de {} KiB não contíguos (tentativa {})", len >> 10, tentativa + 1);
+            eprintln!("câmera: {ultimo}");
+            self.liberar_buffers();
+        }
+        Err(Falha::Memoria(ultimo))
+    }
+
+    /// munmap + REQBUFS 0 (só com o streaming desligado).
+    fn liberar_buffers(&mut self) {
+        unsafe {
+            for &(p, n) in &self.mapas {
+                libc::munmap(p as *mut libc::c_void, n);
+            }
+            if !self.mapas.is_empty() {
+                let mut req = ReqBufs { count: 0, tipo: self.tipo, memory: V4L2_MEMORY_MMAP, ..Default::default() };
+                let _ = xioctl(self.fd, VIDIOC_REQBUFS, &mut req);
+            }
+        }
+        self.mapas.clear();
     }
 
     fn buffer_vazio(&self, planos: &mut [Plano; 1]) -> Buffer {
@@ -470,25 +636,31 @@ impl Dispositivo {
         xioctl(self.fd, VIDIOC_QBUF, &mut b)
     }
 
-    /// Pega um buffer cheio: (índice, início dos dados, fim dos dados). None = ainda não há.
-    fn pegar(&self) -> std::io::Result<Option<(usize, usize, usize)>> {
+    /// Pega um buffer cheio. None = ainda não há. Erro = a guarda do fim do buffer mudou
+    /// (o DMA escreveu além do esperado): a captura tem de parar.
+    fn pegar(&self) -> Result<Option<Cheio>, String> {
         let mut planos: [Plano; 1] = unsafe { std::mem::zeroed() };
         let mut b = self.buffer_vazio(&mut planos);
         match xioctl(self.fd, VIDIOC_DQBUF, &mut b) {
             Ok(()) => {}
             Err(e) if e.raw_os_error() == Some(libc::EAGAIN) => return Ok(None),
-            Err(e) => return Err(e),
+            Err(e) => return Err(format!("DQBUF: {e}")),
         }
         let i = b.index as usize;
-        let tamanho = self.mapas.get(i).map(|m| m.1).unwrap_or(0);
+        let (p, tamanho) = *self.mapas.get(i).ok_or("DQBUF: índice de buffer inválido")?;
+        let guarda = unsafe { std::slice::from_raw_parts(p.add(tamanho - PAGINA), PAGINA) };
+        if guarda.iter().any(|&x| x != GUARDA) {
+            return Err("a câmera escreveu além do quadro (guarda do buffer alterada)".into());
+        }
         let (ini, fim) = if self.mplane {
             // bytesused inclui o data_offset
             (planos[0].data_offset as usize, planos[0].bytesused as usize)
         } else {
             (0, b.bytesused as usize)
         };
-        let fim = if fim == 0 { tamanho } else { fim.min(tamanho) };
-        Ok(Some((i, ini.min(fim), fim)))
+        let fim = fim.min(tamanho);
+        let ruim = b.flags & V4L2_BUF_FLAG_ERROR != 0 || fim < ini || fim - ini < self.quadro;
+        Ok(Some(Cheio { i, ini: ini.min(fim), fim, ruim }))
     }
 
     fn dados(&self, i: usize, ini: usize, fim: usize) -> &[u8] {
@@ -499,20 +671,14 @@ impl Dispositivo {
 
 impl Drop for Dispositivo {
     fn drop(&mut self) {
-        unsafe {
-            if self.ligado {
-                let mut t = self.tipo as libc::c_int;
-                let _ = xioctl(self.fd, VIDIOC_STREAMOFF, &mut t);
-            }
-            for &(p, n) in &self.mapas {
-                libc::munmap(p as *mut libc::c_void, n);
-            }
-            if !self.mapas.is_empty() {
-                let mut req = ReqBufs { count: 0, tipo: self.tipo, memory: V4L2_MEMORY_MMAP, ..Default::default() };
-                let _ = xioctl(self.fd, VIDIOC_REQBUFS, &mut req);
-            }
-            libc::close(self.fd);
+        if self.ligado {
+            let mut t = self.tipo as libc::c_int;
+            let r = xioctl(self.fd, VIDIOC_STREAMOFF, &mut t);
+            eprintln!("câmera: STREAMOFF {r:?}");
         }
+        self.liberar_buffers();
+        unsafe { libc::close(self.fd) };
+        eprintln!("câmera: dispositivo fechado");
     }
 }
 
@@ -535,36 +701,71 @@ fn media_ctl(c: &Config, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&saida.stdout).trim().to_string())
 }
 
-static MODPROBE: Once = Once::new();
-
-/// Carrega os módulos (uma vez), monta o pipeline e devolve o nó de captura.
-fn preparar(c: &Config) -> Result<String, String> {
-    if !Path::new(&c.media).exists() {
-        MODPROBE.call_once(|| {
-            // -a: os três são módulos (sem -a o resto viraria parâmetro do primeiro)
-            let r = Command::new("modprobe").args(["-a", "i2c_qcom_cci", "mt9m114", "qcom_camss"]).status();
-            eprintln!("câmera: modprobe {r:?}");
-        });
-        for _ in 0..20 {
-            if Path::new(&c.media).exists() {
-                break;
+fn modprobe(args: &[&str]) -> bool {
+    match Command::new("modprobe").args(args).status() {
+        Ok(st) => {
+            if !st.success() {
+                eprintln!("câmera: modprobe {} -> {st}", args.join(" "));
             }
-            std::thread::sleep(Duration::from_millis(200));
+            st.success()
+        }
+        Err(e) => {
+            eprintln!("câmera: modprobe {}: {e}", args.join(" "));
+            false
         }
     }
-    if !Path::new(&c.media).exists() {
-        return Err(i18n::t("Câmera indisponível"));
+}
+
+/// Descarrega o camss e o sensor: solta o pipeline do media controller (o driver não o solta
+/// no STREAMOFF), desliga clocks/IRQs do CAMSS e a energia do sensor. Só chamar com o nó de
+/// vídeo já fechado.
+fn desligar_modulos(c: &Config) {
+    if Path::new(&c.media).exists() {
+        // com o driver atual dá EBUSY (pipeline não solto); com um kernel corrigido funciona
+        let _ = media_ctl(c, &["-r"]);
     }
+    let ok = modprobe(&["-r", "qcom_camss", "mt9m114"]);
+    eprintln!("câmera: módulos descarregados: {ok}");
+}
+
+/// Carrega os módulos do zero (descarrega antes se sobraram de uma sessão anterior) e espera
+/// o media controller e o sensor aparecerem.
+fn carregar_modulos(c: &Config) -> Result<(), String> {
+    if Path::new(&c.media).exists() {
+        desligar_modulos(c);
+    }
+    modprobe(&["-a", "i2c_qcom_cci", "mt9m114", "qcom_camss"]);
+    for _ in 0..50 {
+        if Path::new(&c.media).exists() {
+            if let Ok(t) = media_ctl(c, &["-p"]) {
+                if t.contains(&c.sensor) && t.contains("msm_vfe0_video0") {
+                    return Ok(());
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(i18n::t("Câmera indisponível"))
+}
+
+/// Monta o pipeline para `largura`x`altura` (crop 1280x960 do ifp + compose, o scaler do
+/// sensor reduz) e devolve o nó de captura.
+fn preparar(c: &Config, largura: u32, altura: u32) -> Result<String, String> {
     let links = "\"msm_csiphy1\":1->\"msm_csid0\":0[1],\
                  \"msm_csid0\":1->\"msm_ispif0\":0[1],\
                  \"msm_ispif0\":1->\"msm_vfe0_rdi0\":0[1]";
     media_ctl(c, &["-l", links])?;
-    let f = format!("[fmt:UYVY8_1X16/{}x{}]", c.largura, c.altura);
-    let formatos = format!(
-        "\"{s}\":1{f},\"msm_csiphy1\":0{f},\"msm_csid0\":0{f},\"msm_ispif0\":0{f},\"msm_vfe0_rdi0\":0{f}",
-        s = c.sensor
-    );
+    // o crop vem antes (mudar o crop zera o compose)
+    media_ctl(c, &["-V", &format!("\"{}\":0[crop:(4,4)/1280x960]", c.sensor)])?;
+    media_ctl(c, &["-V", &format!("\"{}\":0[compose:(0,0)/{largura}x{altura}]", c.sensor)])?;
+    let f = format!("[fmt:UYVY8_1X16/{largura}x{altura}]");
+    let formatos = format!("\"msm_csiphy1\":0{f},\"msm_csid0\":0{f},\"msm_ispif0\":0{f},\"msm_vfe0_rdi0\":0{f}");
     media_ctl(c, &["-V", &formatos])?;
+    // confere o que o sensor vai mandar
+    let topo = media_ctl(c, &["-p", "-e", &c.sensor])?;
+    if !topo.contains(&format!("UYVY8_1X16/{largura}x{altura}")) {
+        return Err(format!("o sensor não ficou em {largura}x{altura}"));
+    }
     Ok(match &c.video {
         Some(v) => v.clone(),
         None => media_ctl(c, &["-e", "msm_vfe0_video0"])
@@ -670,21 +871,6 @@ impl Conversor {
     }
 }
 
-/// Quantas linhas têm imagem: linhas do pé com todos os bytes zerados (amostrados) são
-/// a "faixa vazia" (o DMA não escreveu ali).
-fn linhas_com_imagem(src: &[u8], bpl: usize, w: usize, h: usize) -> usize {
-    let mut n = h;
-    while n > 2 {
-        let ini = (n - 1) * bpl;
-        let vazia = src[ini..ini + w * 2].iter().step_by(7).all(|&b| b == 0);
-        if !vazia {
-            break;
-        }
-        n -= 1;
-    }
-    n
-}
-
 // ------------------------------------------------------------------ captura
 
 pub enum Evento {
@@ -744,7 +930,12 @@ where
             if parar.load(Ordering::Relaxed) {
                 return;
             }
-            if let Err(e) = capturar(&parar, &foto, &quadro, &tx, &avisar) {
+            let c = config();
+            let r = capturar(&c, &parar, &foto, &quadro, &tx, &avisar);
+            // o nó de vídeo já foi fechado (o Dispositivo caiu dentro de capturar):
+            // solta o pipeline e descarrega os módulos, aconteça o que acontecer
+            desligar_modulos(&c);
+            if let Err(e) = r {
                 eprintln!("câmera: {e}");
                 let _ = tx.send(Evento::Erro(e));
                 avisar();
@@ -755,6 +946,7 @@ where
 }
 
 fn capturar<F>(
+    c: &Config,
     parar: &AtomicBool,
     foto: &AtomicBool,
     slot: &Mutex<Option<Quadro>>,
@@ -764,23 +956,47 @@ fn capturar<F>(
 where
     F: Fn() + Send + Clone + 'static,
 {
-    let c = config();
-    let video = preparar(&c).map_err(|e| {
-        if e == i18n::t("Câmera indisponível") { e } else { i18n::tf("Câmera indisponível: {}", &[&e]) }
-    })?;
+    let indisponivel = i18n::t("Câmera indisponível");
+    carregar_modulos(c).map_err(|_| indisponivel.clone())?;
+
+    // tamanhos em ordem de preferência; só desce se faltar memória contígua
+    let mut tamanhos = vec![(c.largura, c.altura)];
+    for t in [(640, 480), (320, 240)] {
+        if t.0 < tamanhos[0].0 && !tamanhos.contains(&t) {
+            tamanhos.push(t);
+        }
+    }
+    let mut dev = None;
+    let mut ultimo_erro = String::new();
+    for (w, h) in tamanhos {
+        if parar.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let video = preparar(c, w, h).map_err(|e| i18n::tf("Câmera indisponível: {}", &[&e]))?;
+        match Dispositivo::abrir(&video, c, w, h) {
+            Ok(d) => {
+                dev = Some(d);
+                break;
+            }
+            Err(Falha::Memoria(e)) => {
+                eprintln!("câmera: {w}x{h} sem memória contígua ({e}); tentando menor");
+                ultimo_erro = e;
+            }
+            Err(Falha::Outra(e)) => return Err(i18n::tf("erro na câmera: {}", &[&e])),
+        }
+    }
+    let Some(dev) = dev else {
+        return Err(i18n::tf("erro na câmera: {}", &[&ultimo_erro]));
+    };
     if parar.load(Ordering::Relaxed) {
         return Ok(());
     }
-    let dev = Dispositivo::abrir(&video, &c).map_err(|e| i18n::tf("erro na câmera: {}", &[&e]))?;
     let ordem = c.ordem.or_else(|| Ordem::de_fourcc(dev.fourcc)).unwrap_or(Ordem::Uyvy);
     eprintln!("câmera: convertendo como {ordem:?}");
-    let conv = Arc::new(Conversor::novo(ordem, &c));
+    let conv = Arc::new(Conversor::novo(ordem, c));
     let intervalo = Duration::from_millis(1000 / c.fps.max(1) as u64);
-    let (w, bpl) = (dev.largura, dev.bpl);
+    let (w, h, bpl) = (dev.largura, dev.altura, dev.bpl);
 
-    // altura útil: a do driver, a do arquivo de ajustes, ou detectada nos primeiros quadros
-    let mut altura = if c.altura_util > 0 { (c.altura_util as usize).min(dev.altura) } else { dev.altura };
-    let mut detectar = if c.altura_util > 0 { 0 } else { 4 };
     let mut pronta = false;
     let mut ultimo = Instant::now() - intervalo;
     let mut sem_quadro = Instant::now();
@@ -804,28 +1020,13 @@ where
             }
             continue;
         }
-        let Some((i, ini, fim)) = dev.pegar().map_err(|e| i18n::tf("erro na câmera: {}", &[&format!("DQBUF: {e}")]))?
-        else {
+        let Some(cheio) = dev.pegar().map_err(|e| i18n::tf("erro na câmera: {}", &[&e]))? else {
             continue;
         };
         sem_quadro = Instant::now();
-        let dados = dev.dados(i, ini, fim);
-        // linhas que cabem no que o driver entregou
-        let cabem = if dados.len() >= w * 2 { (dados.len() - w * 2) / bpl + 1 } else { 0 };
-        let h = altura.min(cabem);
-
-        if h >= 2 {
-            if detectar > 0 {
-                detectar -= 1;
-                if detectar == 0 {
-                    let n = linhas_com_imagem(dados, bpl, w, h);
-                    if n < h {
-                        eprintln!("câmera: {} linhas vazias no pé; usando {w}x{n}", h - n);
-                        altura = n & !1;
-                    }
-                }
-            }
-            let h = altura.min(cabem);
+        // só quadros completos viram imagem; os outros voltam para a fila sem tocar na tela
+        if !cheio.ruim {
+            let dados = dev.dados(cheio.i, cheio.ini, cheio.fim);
             if !pronta || avisou_sem_quadro {
                 pronta = true;
                 avisou_sem_quadro = false;
@@ -836,7 +1037,7 @@ where
             if foto.swap(false, Ordering::Relaxed) {
                 // copia o quadro cru e devolve o buffer logo; a conversão e o JPEG
                 // ficam numa thread à parte
-                let cru = dados[..(h - 1) * bpl + w * 2].to_vec();
+                let cru = dados[..bpl * h].to_vec();
                 let (conv, tx, avisar, pasta) = (conv.clone(), tx.clone(), avisar.clone(), c.pasta.clone());
                 std::thread::spawn(move || {
                     let r = salvar_foto(&conv, &cru, bpl, w, h, &pasta);
@@ -844,7 +1045,7 @@ where
                     avisar();
                 });
             }
-            // pré-visualização: só converte se a interface já pegou o anterior
+            // pré-visualização a taxa fixa: só converte se a interface já pegou o anterior
             if ultimo.elapsed() >= intervalo && slot.lock().unwrap().is_none() {
                 ultimo = Instant::now();
                 let q = conv.previa(dados, bpl, w, h);
@@ -852,10 +1053,10 @@ where
                 avisar();
             }
         }
-        dev.devolver(i as u32).map_err(|e| i18n::tf("erro na câmera: {}", &[&format!("QBUF: {e}")]))?;
+        dev.devolver(cheio.i as u32).map_err(|e| i18n::tf("erro na câmera: {}", &[&format!("QBUF: {e}")]))?;
     }
     Ok(())
-    // dev cai aqui: STREAMOFF, munmap, close
+    // dev cai aqui: STREAMOFF, munmap, REQBUFS 0, close
 }
 
 // ------------------------------------------------------------------ fotos

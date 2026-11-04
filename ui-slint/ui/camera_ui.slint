@@ -109,13 +109,14 @@ export component TelaCamera inherits Rectangle {
         background: #000000;
         clip: true;
 
+        // tamanho natural (1 pixel da imagem = 1 pixel da tela): sem escala custosa;
+        // o quadro de 640x480 fica centralizado no fundo preto
         Image {
-            x: 0px;
-            y: 0px;
-            width: 960px;
-            height: 720px;
+            width: self.source.width * 1px;
+            height: self.source.height * 1px;
+            x: (960px - self.width) / 2;
+            y: (720px - self.height) / 2;
             source: root.previa;
-            image-fit: contain;
             visible: root.ativa;
         }
 
