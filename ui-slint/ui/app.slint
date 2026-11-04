@@ -128,7 +128,7 @@ component Painel inherits Rectangle {
 // ------------------------------------------------------------------ lançador
 
 // Um app na tela inicial. Os apps nativos são registrados em src/app.rs (APPS).
-export struct AppInfo { id: string, nome: string, icone: string, cor: color }
+export struct AppInfo { id: string, nome: string, icone: string, cor: color, imagem: image, tem-imagem: bool }
 
 component Lancador inherits Rectangle {
     in property <string> hora;
@@ -139,6 +139,56 @@ component Lancador inherits Rectangle {
     in property <string> tocando;
     in property <[AppInfo]> apps;
     callback abrir(string);
+    // paginação: 8 apps por página (4 x 2); a página atual desliza na horizontal
+    property <int> pagina: 0;
+    property <int> paginas: max(1, ceil(root.apps.length / 8));
+    // cartão sob o dedo no toque (-1 = nenhum); usado só para o realce e para abrir o app
+    property <int> pressionado: -1;
+    property <length> x-inicio;
+    clip: true;
+    changed apps => {
+        if root.pagina >= root.paginas { root.pagina = root.paginas - 1; }
+    }
+
+    // índice do app na posição (px, py) da tela, ou -1 se for vazio
+    function indice-em(px: length, py: length) -> int {
+        let ly = py - 115px;
+        if ly < 0px || py > 595px { return -1; }
+        let linha = floor(ly / 250px);
+        if ly - linha * 250px > 230px { return -1; }
+        // px está na tela; conteudo.x é o deslocamento da página atual
+        let lx = px - conteudo.x;
+        let pag = floor(lx / 1280px);
+        let rx = lx - pag * 1280px - 30px;
+        if rx < 0px { return -1; }
+        let coluna = floor(rx / 310px);
+        if coluna > 3 || rx - coluna * 310px > 290px { return -1; }
+        let i = pag * 8 + linha * 4 + coluna;
+        if i >= root.apps.length { return -1; }
+        return i;
+    }
+
+    // uma área por baixo de tudo: troca de página por gesto e toque nos cartões
+    // (declarada primeiro, para o botão Editar e o mini player ficarem por cima)
+    ov := TouchArea {
+        x: 0; y: 0; width: root.width; height: root.height;
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.down {
+                root.x-inicio = self.mouse-x;
+                root.pressionado = root.indice-em(self.mouse-x, self.mouse-y);
+            }
+            if ev.kind == PointerEventKind.up {
+                if self.mouse-x - root.x-inicio > 120px && root.pagina > 0 {
+                    root.pagina = root.pagina - 1;
+                } else if root.x-inicio - self.mouse-x > 120px && root.pagina < root.paginas - 1 {
+                    root.pagina = root.pagina + 1;
+                } else if root.pressionado >= 0 && root.pressionado < root.apps.length {
+                    root.abrir(root.apps[root.pressionado].id);
+                }
+                root.pressionado = -1;
+            }
+        }
+    }
     BotaoEditarInicio { x: 1190px; y: 14px; clicado => { root.abrir("organizar"); } }
     // barra de status
     Text { x: 30px; y: 12px; text: root.hora; font-size: 64px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
@@ -148,23 +198,55 @@ component Lancador inherits Rectangle {
            color: root.wifi-ok ? Cores.bom : Cores.ruim; }
     Text { x: 560px; y: 58px; width: 610px; horizontal-alignment: right; font-size: 26px;
            text: root.bt-conectados; color: Cores.apagado; }
-    // grade de apps: 4 por linha
-    for a[i] in root.apps: Rectangle {
-        x: 30px + mod(i, 4) * 310px;
-        y: 115px + floor(i / 4) * 250px;
-        width: 290px;
-        height: 230px;
-        // cartão do Material com o ícone do app num círculo na cor dele
-        border-radius: Tema.raio-g;
-        background: toque.pressed ? Tema.superficie-alta : Tema.superficie;
-        Rectangle {
-            x: (parent.width - 124px) / 2; y: 20px; width: 124px; height: 124px; border-radius: 62px;
-            background: a.cor;
-            Text { text: a.icone; font-size: 64px; color: Colors.white; }
+    // páginas lado a lado; só a página atual aparece (o conteúdo desliza)
+    conteudo := Rectangle {
+        x: -root.pagina * 1280px;
+        y: 0px;
+        width: root.paginas * 1280px;
+        height: root.height;
+        animate x { duration: 220ms; easing: ease-out; }
+        // grade de apps: 4 por linha, 2 linhas por página
+        for a[i] in root.apps: Rectangle {
+            x: 30px + mod(i, 4) * 310px + floor(i / 8) * 1280px;
+            y: 115px + floor(mod(i, 8) / 4) * 250px;
+            width: 290px;
+            height: 230px;
+            // cartão do Material com o ícone do app num círculo na cor dele
+            border-radius: Tema.raio-g;
+            background: root.pressionado == i ? Tema.superficie-alta : Tema.superficie;
+            Rectangle {
+                x: (parent.width - 124px) / 2; y: 20px; width: 124px; height: 124px; border-radius: 62px;
+                background: a.cor;
+                clip: true;
+                if a.tem-imagem: Image {
+                    x: 0px; y: 0px; width: 124px; height: 124px;
+                    source: a.imagem;
+                    image-fit: cover;
+                }
+                if !a.tem-imagem: Text { text: a.icone; font-size: 64px; color: Colors.white; }
+            }
+            Text { x: 0; y: 162px; width: parent.width; text: a.nome; font-size: 34px; color: Tema.texto;
+                   horizontal-alignment: center; }
         }
-        Text { x: 0; y: 162px; width: parent.width; text: a.nome; font-size: 34px; color: Tema.texto;
-               horizontal-alignment: center; }
-        toque := TouchArea { clicked => { root.abrir(a.id); } }
+    }
+    // indicador de páginas: pontos logo acima da barra "tocando"; toque num ponto vai para a página
+    if root.paginas > 1: Rectangle {
+        x: 0px; y: 596px; width: root.width; height: 28px;
+        for k in root.paginas: Rectangle {
+            x: (parent.width - root.paginas * 40px) / 2 + k * 40px;
+            y: 0px; width: 40px; height: 28px;
+            Rectangle {
+                x: (parent.width - (k == root.pagina ? 28px : 12px)) / 2;
+                y: 8px;
+                width: k == root.pagina ? 28px : 12px;
+                height: 12px;
+                border-radius: 6px;
+                background: k == root.pagina ? Tema.destaque : Tema.texto-sec;
+                opacity: k == root.pagina ? 1 : 0.4;
+                animate width, x { duration: 220ms; easing: ease-out; }
+            }
+            TouchArea { x: 0px; y: 0px; width: parent.width; height: parent.height; clicked => { root.pagina = k; } }
+        }
     }
     // mini player: aparece quando tem música tocando
     if root.tocando != "": Botao {

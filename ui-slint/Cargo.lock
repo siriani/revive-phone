@@ -3352,6 +3352,7 @@ dependencies = [
 name = "revive-ui"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "chrono",
  "evdev",
  "i-slint-common",

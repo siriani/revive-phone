@@ -87,7 +87,7 @@ The UI text is currently in Brazilian Portuguese.
 
 ## License
 
-MIT (see [LICENSE](LICENSE)). Bundled: Slint Material components (`ui-slint/material`, MIT, © SixtyFPS GmbH, metrics scaled 1.5x), Material Symbols icons (`ui-slint/ui/icones`, Apache-2.0, © Google), DejaVu fonts (`ui-slint/ui/fontes`, free license). Kernel patches in `devices/*/patches` are GPL-2.0, like
+MIT (see [LICENSE](LICENSE)). Bundled: Slint Material components (`ui-slint/material`, MIT, © SixtyFPS GmbH, metrics scaled 1.5x), Material Symbols icons (`ui-slint/ui/icones`, Apache-2.0, © Google), DejaVu fonts (`ui-slint/ui/fontes`, free license). The DOOM engine in `doom/engine` is [doomgeneric](https://github.com/ozkl/doomgeneric) (GPL-2.0); no game data is included — put your own `doom2.wad` in `/var/lib/revive/doom/` (Freedoom is used otherwise). Kernel patches in `devices/*/patches` are GPL-2.0, like
 the Linux kernel; device tree files keep their original license header.
 
 ---

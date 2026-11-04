@@ -20,6 +20,8 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "json"] }
 
 [build-dependencies]
+# o motor do DOOM (doom/engine) é compilado para uma lib estática no build
+cc = "1"
 slint-build = "1.18.1"
 # fontconfig só carregado em tempo de execução (as fontes vão embutidas no binário)
 i-slint-common = { version = "=1.18.1", features = ["fontconfig-dlopen"] }

@@ -8,11 +8,13 @@ mod app;
 mod clima;
 mod cripto;
 mod dados;
+mod doom;
 mod inicio;
 mod manifesto;
 mod musica;
 mod sistema;
 mod tela;
+mod wad;
 mod telegram;
 
 use std::os::fd::RawFd;
@@ -152,6 +154,22 @@ fn main() {
         }
     };
     loop {
+        // O DOOM roda como app, desenhando direto no framebuffer: aqui só se espera.
+        // A entrada é lida pelo jogo, então nada é despachado para a interface.
+        if doom::ativo() {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+        if doom::saiu() {
+            // descarta o que ficou na fila do evdev enquanto o jogo tinha os dispositivos
+            for fd in entrada.fds() {
+                let _ = entrada.ler(fd, &tela);
+            }
+            // o jogo pausou/encerrou: a tela inteira precisa ser redesenhada
+            tela.redesenhar_tudo = true;
+            janela.request_redraw();
+            app::voltar_inicio(&ui);
+        }
         let t = Instant::now();
         slint::platform::update_timers_and_animations();
         etapa("timers", t);

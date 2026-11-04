@@ -1,3 +1,16 @@
+use std::path::{Path, PathBuf};
+
+/// .c do doomgeneric que precisam de SDL/Allegro (backends de música e som):
+/// o Makefile do doom também não os compila, e nada do jogo depende deles.
+const FORA: &[&str] = &[
+    "gusconf.c",
+    "i_allegromusic.c",
+    "i_allegrosound.c",
+    "i_sdlmusic.c",
+    "i_sdlsound.c",
+    "icon.c",
+];
+
 fn main() {
     // tamanhos de texto da biblioteca Material (escalada 1,5x): chegam aos componentes por
     // variável, então o compilador não os vê; sem isto a fonte não seria pré-renderizada neles
@@ -18,4 +31,35 @@ fn main() {
             )])),
     )
     .unwrap();
+
+    // O backend do DOOM (doom/revive/doomgeneric_revive.c) não entra: ele é substituído
+    // por src/doom.rs. O motor continua sendo C e vira uma biblioteca estática.
+    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../doom/engine");
+    let mut fontes: Vec<PathBuf> = std::fs::read_dir(&engine)
+        .unwrap_or_else(|e| panic!("doom/engine: {e}"))
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("c"))
+        .filter(|p| {
+            let nome = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            !FORA.contains(&nome)
+        })
+        .collect();
+    fontes.sort();
+    assert!(!fontes.is_empty(), "nenhum .c em {}", engine.display());
+
+    let mut build = cc::Build::new();
+    build
+        .files(&fontes)
+        .include(&engine)
+        .flag("-O2")
+        .flag("-w")
+        .define("NORMALUNIX", None)
+        .define("LINUX", None)
+        .define("_DEFAULT_SOURCE", None)
+        // "Quit" no menu (e qualquer exit do motor) volta para a interface: revive_doom_sair
+        .define("exit", "revive_doom_sair")
+        .compile("doomengine");
+
+    println!("cargo:rerun-if-changed=../doom/engine");
 }

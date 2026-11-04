@@ -32,6 +32,7 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
     ("clima", "Clima", "☀", (176, 120, 20)),
+    ("doom", "DOOM II", "☠", (150, 30, 20)),
     ("ajustes", "Ajustes", "⚙", (70, 74, 84)),
 ];
 
@@ -562,6 +563,11 @@ fn ir(ui: &AppWindow, tela: &str) {
     if tela == "telegram" {
         return abrir_telegram(ui);
     }
+    if tela == "doom" {
+        // o jogo roda dentro do próprio revive-ui (src/doom.rs)
+        crate::doom::abrir();
+        return;
+    }
     if tela == "clima" {
         return abrir_clima(ui);
     }
@@ -584,6 +590,11 @@ fn ir(ui: &AppWindow, tela: &str) {
         }
         _ => {}
     }
+}
+
+/// Volta para a tela inicial (usado quando o DOOM devolve a tela para a interface).
+pub fn voltar_inicio(ui: &AppWindow) {
+    ir(ui, "inicio");
 }
 
 // --------------------------------------------- música no estilo Spotify
@@ -1318,20 +1329,44 @@ thread_local! {
     static ACORDADO: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
 
+/// Ícone em imagem de alguns apps. DOOM II: a arte que o jogador pôs no aparelho
+/// (/var/lib/revive/doom/icone.png) ou, sem ela, o rosto do Doomguy tirado do próprio WAD.
+fn icone_app(id: &str) -> Option<Image> {
+    if id != "doom" {
+        return None;
+    }
+    if let Ok(img) = image::open("/var/lib/revive/doom/icone.png") {
+        let img = img.to_rgba8();
+        let (w, h) = img.dimensions();
+        return Some(Image::from_rgba8(SharedPixelBuffer::clone_from_slice(img.as_raw(), w, h)));
+    }
+    ["/var/lib/revive/doom/doom2.wad", "/usr/share/games/doom/freedoom2.wad"]
+        .iter()
+        .find_map(|w| crate::wad::figura(w, "STFST01"))
+        .map(Image::from_rgba8)
+}
+
 /// Apps nativos e de manifesto, na ordem padrão.
 fn todos_apps() -> Vec<AppInfo> {
     APPS.iter()
-        .map(|(id, nome, icone, (r, g, b))| AppInfo {
-            id: ss(*id),
-            nome: ss(*nome),
-            icone: ss(*icone),
-            cor: Color::from_rgb_u8(*r, *g, *b),
+        .map(|(id, nome, icone, (r, g, b))| {
+            let imagem = icone_app(id);
+            AppInfo {
+                id: ss(*id),
+                nome: ss(*nome),
+                icone: ss(*icone),
+                cor: Color::from_rgb_u8(*r, *g, *b),
+                tem_imagem: imagem.is_some(),
+                imagem: imagem.unwrap_or_default(),
+            }
         })
         .chain(manifesto::todos().iter().map(|m| AppInfo {
             id: ss(format!("m:{}", m.id)),
             nome: ss(m.nome.clone()),
             icone: ss(m.icone.clone()),
             cor: Color::from_rgb_u8(m.cor.0, m.cor.1, m.cor.2),
+            imagem: Image::default(),
+            tem_imagem: false,
         }))
         .collect()
 }
