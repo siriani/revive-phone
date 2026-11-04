@@ -46,14 +46,22 @@ for f in a300_pm4.fw a300_pfp.fw; do
 		|| { rm -f "$FWDIR/$f"; echo "AVISO: não baixou $f; a GPU fica sem aceleração"; }
 done
 
-# Vídeo: msm e qcom_wled ficam fora do boot (modprobe.blacklist) e o revive-video os carrega depois.
+# Drivers de hardware (vídeo, CPU, câmera, áudio) ficam fora do boot (modprobe.blacklist)
+# e o revive-video os carrega 15 s depois: se algum travar, o boot já terminou.
 # Idempotente; só mexe no extlinux se ele existir (lk2nd, postmarketOS).
 EXTLINUX=/boot/extlinux/extlinux.conf
+BLACKLIST="msm qcom_wled cpufreq_dt fts2_apc_regulator i2c_qcom_cci qcom_camss mt9m114 ar0543 \
+slim_qcom_ngd_ctrl snd_soc_wcd9306 apr q6core q6afe q6adm q6asm q6routing q6afe_dai q6asm_dai \
+snd_q6dsp_common snd_soc_msm8226"
 if [ -f "$EXTLINUX" ]; then
-	grep -q 'modprobe.blacklist=msm,qcom_wled' "$EXTLINUX" \
-		|| sed -i 's#^\(\tappend .*\)$#\1 modprobe.blacklist=msm,qcom_wled#' "$EXTLINUX"
-	grep -q 'modprobe.blacklist=msm,qcom_wled' "$EXTLINUX" \
-		|| echo "AVISO: não achei a linha append em $EXTLINUX; inclua modprobe.blacklist=msm,qcom_wled à mão"
+	grep -q 'modprobe.blacklist=' "$EXTLINUX" \
+		|| sed -i 's#^\(\tappend .*\)$#\1 modprobe.blacklist=msm#' "$EXTLINUX"
+	for m in $BLACKLIST; do
+		grep -qE "modprobe.blacklist=([^ ]*,)?$m(,| |$)" "$EXTLINUX" \
+			|| sed -i "s#modprobe.blacklist=#modprobe.blacklist=$m,#" "$EXTLINUX"
+	done
+	grep -q 'modprobe.blacklist=' "$EXTLINUX" \
+		|| echo "AVISO: não achei a linha append em $EXTLINUX; inclua modprobe.blacklist à mão"
 fi
 
 # Bluetooth: só A2DP saindo para a caixa de som; uhid para teclado/mouse BLE; rádio ligado no boot

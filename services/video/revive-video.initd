@@ -1,29 +1,34 @@
 #!/sbin/openrc-run
-# Carrega o driver de vídeo (msm, DRM) e a luz de fundo (qcom_wled) alguns segundos
-# depois do boot e reinicia a interface. O extlinux leva modprobe.blacklist=msm,qcom_wled
-# (ver install.sh), então o boot não trava na inicialização do DSI.
-description="Revive: carrega msm e qcom_wled depois do boot e reinicia revive-ui"
-: ${REVIVE_VIDEO_DELAY:=15}
-LOG=/var/log/revive-video.log
-
-depend() {
-	need localmount
-	after revive-ui
+# Revive: drivers de hardware carregados DEPOIS do boot. O boot fica protegido
+# (modprobe.blacklist no extlinux): se algum driver travar, há 15 s para reverter por SSH.
+description="Revive: vídeo (msm + WLED), CPU, câmera e áudio carregados após o boot"
+depend() { after revive-ui; }
+carregar() { for m in "$@"; do modprobe "$m" || echo "falhou: $m"; done; }
+mixer() { amixer -q -c falcon cset name="$1" "$2" || echo "mixer falhou: $1"; }
+audio() {
+	# só com o DTB de áudio (nó /sound e o APR no ADSP)
+	[ -d /sys/firmware/devicetree/base/sound ] || { echo "sem nó de som no DT"; return; }
+	carregar apr q6core q6afe snd-q6dsp-common q6adm q6asm q6routing q6afe-dai q6asm-dai snd-soc-msm8226
+	for i in $(seq 60); do [ -e /proc/asound/falcon ] && break; sleep 0.5; done
+	[ -e /proc/asound/falcon ] || { echo "placa de som não apareceu"; return; }
+	mixer "SLIMBUS_0_RX Audio Mixer MultiMedia1" 1
+	mixer "SLIM RX1 MUX" AIF1_PB
+	mixer "RX3 MIX1 INP1" RX1
+	mixer "SPK DAC Switch" on
+	mixer "RX3 Digital Volume" 84
+	mixer "SPK DRV Volume" 7
+	echo "som interno pronto: $(date)"
 }
-
 start() {
-	ebegin "Revive: driver de vídeo em ${REVIVE_VIDEO_DELAY} s"
-	# em segundo plano: o carregamento não segura o boot
-	( sleep "$REVIVE_VIDEO_DELAY"
-	  {
-	    echo "$(date) carregando msm"
-	    if modprobe msm && modprobe qcom_wled; then
-	      echo "$(date) msm e qcom_wled carregados; reiniciando revive-ui"
-	      rc-service revive-ui restart
-	    else
-	      echo "$(date) falhou ao carregar msm/qcom_wled; a interface segue no simplefb"
-	    fi
-	  } >>"$LOG" 2>&1
-	) </dev/null >/dev/null 2>&1 &
+	ebegin "Carregando drivers de hardware em 15 s"
+	(
+		sleep 15
+		carregar fts2-apc-regulator cpufreq-dt; for c in /sys/devices/system/cpu/cpu*/cpufreq; do echo 998400 > $c/scaling_max_freq; done
+		carregar msm qcom_wled; sleep 3; rc-service revive-ui restart
+		carregar slim-qcom-ngd-ctrl snd-soc-wcd9306
+		carregar i2c_qcom_cci mt9m114 ar0543 qcom_camss
+		audio
+		echo "carregados: $(date)"
+	) >/var/log/revive-video.log 2>&1 &
 	eend 0
 }

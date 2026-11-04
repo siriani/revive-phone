@@ -14,6 +14,7 @@ import json
 import math
 import os
 import random
+import socket
 import struct
 import subprocess
 import time
@@ -31,6 +32,12 @@ LOG = "/var/log/revive-bt.log"
 SOM = "/usr/share/revive/test.wav"
 ASOUND = "/etc/asound.conf"
 MESH = "/etc/revive/mesh.conf"
+MPV_SOCK = "/run/revive-mpv.sock"
+# placa de som do alto-falante interno (msm8226 "falcon"); só existe com o DTB de áudio
+CARTAO_INTERNO = "/proc/asound/falcon"
+ASOUND_INTERNO = ("# escrito pelo revive-bt: alto-falante interno (nenhuma caixa conectada)\n"
+                  'pcm.!default { type plug slave.pcm "hw:falcon,0" }\n'
+                  'ctl.!default { type hw card falcon }\n')
 
 BLUEZ = "org.bluez"
 ADAPTER = "org.bluez.Adapter1"
@@ -92,6 +99,18 @@ def tipo(icon):
     if icon.startswith("computer"):
         return "computador"
     return ""
+
+
+def recarregar_mpv():
+    """O mpv só relê o asound.conf ao reabrir a saída de áudio."""
+    try:
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(2)
+        s.connect(MPV_SOCK)
+        s.sendall(b'{"command":["set_property","audio-device","auto"]}\n{"command":["ao-reload"]}\n')
+        s.close()
+    except OSError as e:
+        log(f"mpv: {e}")
 
 
 def gerar_som():
@@ -294,6 +313,7 @@ class Bluetooth:
         if self.scanning and time.time() > self.scan_fim:
             self.parar_scan()
         self.reconectar_som()
+        self.saida_de_som()
         self.salvar()
         return True
 
@@ -398,7 +418,25 @@ class Bluetooth:
                         'defaults.bluealsa.profile "a2dp"\n'
                         'pcm.!default { type plug slave.pcm "bluealsa" }\n'
                         'ctl.!default { type bluealsa }\n')
+            recarregar_mpv()
             self.som(mac)
+
+    def saida_de_som(self):
+        """Sem caixa conectada, a saída padrão volta para o alto-falante interno."""
+        if any(a["tipo"] == "som" and a["conectado"] for a in self.aparelhos()):
+            return
+        if not os.path.exists(CARTAO_INTERNO):
+            return
+        try:
+            with open(ASOUND) as f:
+                if f.read() == ASOUND_INTERNO:
+                    return
+        except OSError:
+            pass
+        with open(ASOUND, "w") as f:
+            f.write(ASOUND_INTERNO)
+        log("saída de som: alto-falante interno")
+        recarregar_mpv()
 
     def som(self, mac):
         gerar_som()
