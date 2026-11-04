@@ -7,7 +7,7 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
 
 | Part | Status | Notes |
 |---|---|---|
-| Display (DRM/KMS, `msm`) | ✅ | CMI 720p panel driver ([patch 0002](patches/0002-drm-panel-falcon-cmi-reset-energia-clock.patch)); loaded 15 s after boot by `revive-video`. simplefb stays enabled as the fallback |
+| Display (DRM/KMS, `msm`) | ✅ | CMI 720p panel driver ([patches/display](patches/display/)); loaded 15 s after boot by `revive-video`. simplefb stays enabled as the fallback |
 | Touch (Synaptics S2316T, RMI4) | ✅ | needs **l28 at 3.1 V** (see below) |
 | Wi-Fi (WCN3620, 2.4 GHz) | ✅ | needs the wcn36xx patch; 802.11n disabled (up to 54 Mbps) |
 | Bluetooth | ✅ | fixed address via `local-bd-address` (`revive-set-bt-address`) |
@@ -16,19 +16,19 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
 | GPS | ✅ | sees satellites (fix needs open sky) |
 | Vibration, temperatures | ✅ | |
 | Notification LED | ⚠️ | LPG + MPP6 driver loads, not visually confirmed |
-| CPU frequency | ⚠️ | 300–787 MHz; 1.19 GHz needs CPR/voltage scaling (not done) |
+| CPU frequency | ⚠️ | 300–787 MHz stable. **1.19 GHz is experimental and untested**: APC regulator driver + fixed OPP voltages, no CPR ([patches/cpu](patches/cpu/)) |
 | Backlight (WLED, PM8226) | ✅ | `qcom_wled`, loaded with the display driver |
 | GPU (Adreno 305) | ✅ | Mesa freedreno (FD305, OpenGL 3.1); `a300_pm4.fw` and `a300_pfp.fw` from linux-firmware |
 | ADSP (LPASS) | ✅ | remoteproc with the firmware extracted from the stock Android (not redistributed) |
-| Camera (front MT9M114) | ⚠️ | sensor detected over CCI; no frames yet. Rear AR0543 not started |
-| Audio (speaker/jack) | ⚠️ | WIP: the ADSP is up; the WCD9306 codec driver is in progress |
+| Camera (front MT9M114) | ✅ | captures frames through CAMSS (CSIPHY 1, one lane, `data-lanes = <0>`) ([patches/camera](patches/camera/)). Clock/VFE 4.0 tuning in `camera/experimental/` is untested. Rear AR0543 not supported |
+| Audio (speaker/jack) | ⚠️ | codec detected, no sound yet: SLIMbus NGD in PIO mode, the WCD9306 enumerates (chip id 0x0103) ([patches/audio](patches/audio/)). No audio path yet |
 
 ## Fixes in this folder
 
 1. **Wi-Fi hard freeze ~3 min after connecting** — the WCN3620 only has 2.4 GHz,
    but during scans the firmware tags some frames as 5 GHz and `wcn36xx` dereferences
    a NULL band inside the IRQ handler. Fixed by
-   [`patches/0001-wifi-wcn36xx-...patch`](patches/).
+   [`patches/wifi/`](patches/wifi/).
 2. **Wi-Fi firmware crash on 802.11n aggregation (ADD_BA)** — worked around by running
    `wpa_supplicant` with `disable_ht=1` outside NetworkManager
    ([`wifi/`](wifi/)).
@@ -45,6 +45,20 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
    `extlinux.conf`; an apk hook runs it after every package update.
 7. **Touch/accelerometer probe sometimes fails at boot** — `revive-i2c-retry` re-binds
    the drivers until the devices appear.
+
+## Kernel patches
+
+All kernel patches are GPL-2.0 and apply to the msm8226-mainline tree
+(`v6.16.12-msm8226-u2`) with `git am`, folder by folder in this order:
+
+| Folder | What | State |
+|---|---|---|
+| [`wifi/`](patches/wifi/) | wcn36xx: drop frames for bands the chip does not have | tested |
+| [`display/`](patches/display/) | CMI 720p panel driver (`motorola,falcon-panel-cmi`) | tested |
+| [`camera/`](patches/camera/) | CAMSS for MSM8226: binding, driver, `camss` node in the SoC dtsi | tested (front camera captures). **Required to build this DTS**, which uses `&camss` |
+| [`camera/experimental/`](patches/camera/experimental/) | MSM8226 clock rates, CSID setup, VFE 4.0 + VBIF | experimental, untested |
+| [`audio/`](patches/audio/) | SLIMbus NGD PIO mode, pd-mapper table, WCD9306 skeleton, NGD node in the SoC dtsi; [`falcon-slim-ngd.dtso`](patches/audio/falcon-slim-ngd.dtso) enables it on the phone | tested: the codec enumerates, no sound yet |
+| [`cpu/`](patches/cpu/) | APC (CPU) regulator on PM8226 S2 + [`msm8226-motorola-falcon-cpufreq.dtsi`](patches/cpu/msm8226-motorola-falcon-cpufreq.dtsi) (include it at the end of the DTS) | experimental, untested: a wrong voltage can hang the phone |
 
 ## Testing safely
 
@@ -90,8 +104,8 @@ initialisation used to freeze the phone while it started.
    `extlinux.conf` on the `userdata` partition.
 3. **Kernel**: build the
    [msm8226-mainline](https://github.com/msm8226-mainline/linux) kernel (tag
-   `v6.16.12-msm8226-u2` was used) with the patch from `patches/` and this folder's
-   `msm8226-motorola-falcon.dts`. With pmbootstrap:
+   `v6.16.12-msm8226-u2` was used) with the patches from `patches/` (see
+   [Kernel patches](#kernel-patches)) and this folder's `msm8226-motorola-falcon.dts`. With pmbootstrap:
    `pmbootstrap build linux-postmarketos-qcom-msm8226 --src=<kernel tree> --force`.
 4. **postmarketOS**: `pmbootstrap init` with the generic `qcom-msm8226` device,
    **OpenRC** (systemd does not work on armv7 here) and the `console` UI, then

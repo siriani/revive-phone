@@ -11,22 +11,26 @@ What is planned, roughly in order. Device-specific items refer to the Motorola M
 - **GPU** — Adreno 305 with Mesa freedreno (FD305, OpenGL 3.1), using the linux-firmware
   `a300` firmware.
 - **ADSP** — the QDSP6 remoteproc boots with the firmware taken from the phone.
+- **Front camera (MT9M114)** — CAMSS ported to the MSM8226; the sensor streams frames
+  over CSIPHY 1 with one data lane (`data-lanes = <0>`, 19.2 MHz MCLK).
 
 ## Big projects (kernel / hardware)
 
-- **Audio** — the ADSP now runs, so the next step is the WCD9306 codec driver over
-  SLIMbus (today only the chip-id probe exists). Then route the loudspeaker and the
-  headphone jack, and the internal microphone (voice recorder app).
-- **Cameras** — the MSM8226 camera subsystem (CAMSS) is not supported in mainline; it is
-  close to the MSM8916 one, so the port starts from there, using the vendor device
-  tree for clocks, regulators and GPIOs.
-  - *Front (MT9M114, 1.2 MP)*: first target. The sensor is detected over CCI but has
-    produced no frames yet. Next step: stream frames through CAMSS with the 24 MHz MCLK
-    and one data lane; then move the sensor to the two lanes the stock firmware uses.
-  - *Rear (AR0543, 5 MP)*: also needs a new sensor driver and software processing of the
-    raw Bayer frames (e.g. libcamera's software ISP).
-- **CPU at 1.19 GHz** — mainline stops at 787 MHz because the OPP table has no voltages;
-  needs CPR/voltage scaling on the APC regulator, then a stress test.
+- **Audio** — the SLIMbus NGD runs in PIO mode and the WCD9306 codec enumerates (chip
+  id 0x0103), but there is no sound yet. Next: the codec register map and DAPM
+  routes, the SLIMbus data channels and the ADSP (APR/Q6) DAIs; then the loudspeaker,
+  the headphone jack and the internal microphone (voice recorder app).
+- **Cameras**
+  - *Front (MT9M114)*: frames work. Next: test the MSM8226 clock rates and VFE 4.0
+    patches (`patches/camera/experimental/`), then libcamera / an app; two data lanes
+    like the stock firmware.
+  - *Rear (AR0543, 5 MP)*: needs a new sensor driver written from public documentation,
+    plus software processing of the raw Bayer frames (e.g. libcamera's software ISP).
+- **CPU at 1.19 GHz** — an APC regulator driver and fixed OPP voltages (the stock CPR
+  ceilings) are written but **untested** (`patches/cpu/`). Next: test 998 MHz first,
+  then 1.19 GHz under a stress test; real CPR later.
+- **Upstream** — send the panel driver, the MSM8226 CAMSS support, the SLIMbus NGD PIO
+  mode and the falcon DTS changes to the kernel mailing lists.
 
 ## Apps
 
