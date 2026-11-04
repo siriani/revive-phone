@@ -550,6 +550,57 @@ component MusicaAlbum inherits Rectangle {
     }
 }
 
+// ---------------------------------------------------------------- telegram
+
+export struct Bolha { texto: string, minha: bool, hora: string }
+
+component TelaTgLogin inherits Rectangle {
+    in property <string> mensagem;
+    in property <string> botao;
+    callback digitar();
+    callback voltar();
+    Titulo { text: "Telegram"; }
+    Text { x: 80px; y: 150px; width: 1120px; height: 300px; text: root.mensagem; font-size: 34px;
+           color: Cores.texto; wrap: word-wrap; horizontal-alignment: center; }
+    Rodape { width: parent.width; direita: root.botao; clicou-esquerda => { root.voltar(); }
+             clicou-direita => { root.digitar(); } }
+}
+
+component TelaTgChat inherits Rectangle {
+    in property <string> nome;
+    in property <[Bolha]> bolhas;
+    callback escrever();
+    callback voltar();
+    Titulo { text: root.nome; }
+    Flickable {
+        x: 30px; y: 85px; width: 1220px; height: 525px;
+        viewport-height: max(self.height, col.preferred-height);
+        // começa no fim da conversa (mensagens mais novas embaixo)
+        viewport-y: min(0px, self.height - col.preferred-height);
+        col := VerticalLayout {
+            width: 1220px;
+            spacing: 10px;
+            padding: 6px;
+            for b in root.bolhas: HorizontalLayout {
+                alignment: b.minha ? end : start;
+                Rectangle {
+                    max-width: 900px;
+                    border-radius: 16px;
+                    background: b.minha ? #2b5278 : Cores.cartao;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 4px;
+                        Text { text: b.texto; wrap: word-wrap; font-size: 26px; color: Cores.texto; }
+                        Text { text: b.hora; font-size: 26px; color: Cores.apagado; horizontal-alignment: right; }
+                    }
+                }
+            }
+        }
+    }
+    Rodape { width: parent.width; direita: "Escrever"; clicou-esquerda => { root.voltar(); }
+             clicou-direita => { root.escrever(); } }
+}
+
 // ------------------------------------------------- configuração do Navidrome
 
 component TelaConfMusica inherits Rectangle {
@@ -717,6 +768,13 @@ export component AppWindow inherits Window {
     callback mus-navegar(string);
     callback album-tocar(int);
     callback album-aleatorio();
+    in property <string> tg-mensagem;
+    in property <string> tg-botao;
+    in property <string> tg-nome;
+    in property <[Bolha]> tg-bolhas;
+    callback tg-digitar();
+    callback tg-escrever();
+    callback tg-voltar();
     in property <string> conf-url;
     in property <string> conf-usuario;
     in property <string> conf-senha;
@@ -814,6 +872,16 @@ export component AppWindow inherits Window {
             hora: root.hora; data: root.data; wifi-ssid: root.wifi-ssid; wifi-ok: root.wifi-ok;
             bt-conectados: root.bt-conectados; tocando: root.tocando; apps: root.apps;
             abrir(id) => { root.ir(id); }
+        }
+        if root.tela == "tg-login": TelaTgLogin {
+            width: 1280px; height: 720px; mensagem: root.tg-mensagem; botao: root.tg-botao;
+            digitar => { root.tg-digitar(); }
+            voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "tg-chat": TelaTgChat {
+            width: 1280px; height: 720px; nome: root.tg-nome; bolhas: root.tg-bolhas;
+            escrever => { root.tg-escrever(); }
+            voltar => { root.tg-voltar(); }
         }
         if root.tela == "musica-conf": TelaConfMusica {
             width: 1280px; height: 720px; url: root.conf-url; usuario: root.conf-usuario;

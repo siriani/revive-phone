@@ -10,6 +10,7 @@ mod dados;
 mod manifesto;
 mod musica;
 mod tela;
+mod telegram;
 
 use std::os::fd::RawFd;
 use std::rc::Rc;

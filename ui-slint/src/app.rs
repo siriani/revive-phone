@@ -13,7 +13,8 @@ use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPix
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppWindow, Aparelho, Faixa, Item, Moeda, Rede, Tecla, Vela};
+use crate::{Album, AppInfo, AppWindow, Aparelho, Bolha, Faixa, Item, Moeda, Rede, Tecla, Vela};
+use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
 
@@ -25,6 +26,7 @@ const POR_PAGINA: usize = 8;
 const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("painel", "Painel", "◷", (70, 55, 30)),
     ("cripto", "Cripto", "★", (58, 45, 90)),
+    ("telegram", "Telegram", "✉", (32, 90, 140)),
     ("musica", "Música", "♫", (40, 60, 90)),
     ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
@@ -39,6 +41,8 @@ enum Acao {
     Playlist(Value),
     /// item só informativo (apps por manifesto)
     Nada,
+    /// abre a conversa i do Telegram
+    TgAbrir(usize),
 }
 
 #[derive(Clone)]
@@ -62,6 +66,8 @@ enum Modo {
     Busca,
     /// campo da configuração do Navidrome: "url", "usuário" ou "senha"
     Campo(String),
+    /// Telegram: "telefone", "codigo", "senha" ou "mensagem"
+    Tg(String),
 }
 
 struct Estado {
@@ -290,6 +296,7 @@ fn executar(ui: &AppWindow, acao: Acao) {
             abrir_lista(ui, a["name"].as_str().unwrap_or(""), move |s| Ok(itens_albuns(s.albuns_do_artista(&id)?)));
         }
         Acao::Nada => {}
+        Acao::TgAbrir(i) => tg_cmd(telegram::Cmd::Abrir(i)),
         Acao::Playlist(p) => {
             let id = p["id"].as_str().unwrap_or("").to_string();
             abrir_lista(ui, p["name"].as_str().unwrap_or(""), move |s| Ok(itens_faixas(s.playlist(&id)?, true)));
@@ -375,11 +382,14 @@ fn teclas(shift: bool, sym: bool, confirmar: &str) -> Vec<Tecla> {
 
 fn atualizar_teclado(ui: &AppWindow) {
     EST.with_borrow(|e| {
-        let senha = matches!(&e.modo, Modo::Senha(_)) || matches!(&e.modo, Modo::Campo(c) if c == "senha");
+        let senha = matches!(&e.modo, Modo::Senha(_))
+            || matches!(&e.modo, Modo::Campo(c) if c == "senha")
+            || matches!(&e.modo, Modo::Tg(c) if c == "senha");
         let confirmar = match &e.modo {
             Modo::Senha(_) => "Conectar",
             Modo::Busca => "Buscar",
             Modo::Campo(_) => "OK",
+            Modo::Tg(_) => "Enviar",
         };
         let mostrado = if senha && e.ocultar { "•".repeat(e.texto.chars().count()) } else { e.texto.clone() };
         let ini = mostrado.chars().count().saturating_sub(30);
@@ -388,6 +398,12 @@ fn atualizar_teclado(ui: &AppWindow) {
             Modo::Senha(s) => format!("senha de {}", curto(s, 18)),
             Modo::Busca => "buscar música".into(),
             Modo::Campo(c) => format!("{c} do Navidrome"),
+            Modo::Tg(c) => match c.as_str() {
+                "telefone" => "telefone com DDI, ex.: +5511999999999".into(),
+                "codigo" => "código que chegou no Telegram".into(),
+                "senha" => "senha de duas etapas".into(),
+                _ => "mensagem".into(),
+            },
         }));
         ui.set_teclado_senha(senha);
         ui.set_teclado_ocultar(e.ocultar);
@@ -414,12 +430,34 @@ fn confirmar(ui: &AppWindow) {
             Modo::Senha(s) => Modo::Senha(s.clone()),
             Modo::Busca => Modo::Busca,
             Modo::Campo(c) => Modo::Campo(c.clone()),
+            Modo::Tg(c) => Modo::Tg(c.clone()),
         };
         (m, e.texto.clone())
     });
     match modo {
         Modo::Senha(ssid) => conectar_wifi(ui, ssid, texto),
         Modo::Busca => buscar(ui, texto.trim().to_string()),
+        Modo::Tg(c) => {
+            let v = texto.trim().to_string();
+            if v.is_empty() {
+                return;
+            }
+            match c.as_str() {
+                "mensagem" => {
+                    ui.set_tela(ss("tg-chat"));
+                    tg_cmd(telegram::Cmd::Enviar(v));
+                }
+                passo => {
+                    ui.set_tg_mensagem(ss("aguarde..."));
+                    ui.set_tela(ss("tg-login"));
+                    tg_cmd(match passo {
+                        "telefone" => telegram::Cmd::Telefone(v),
+                        "codigo" => telegram::Cmd::Codigo(v),
+                        _ => telegram::Cmd::Senha(v),
+                    });
+                }
+            }
+        }
         Modo::Campo(c) => {
             let v = texto.trim().to_string();
             EST.with_borrow_mut(|e| match c.as_str() {
@@ -438,9 +476,13 @@ fn cancelar_teclado(ui: &AppWindow) {
         Modo::Senha(_) => 0,
         Modo::Busca => 1,
         Modo::Campo(_) => 2,
+        Modo::Tg(c) if c == "mensagem" => 3,
+        Modo::Tg(_) => 4,
     }) {
         0 => ir(ui, "wifi"),
         1 => ui.set_tela(ss("musica")),
+        3 => ui.set_tela(ss("tg-chat")),
+        4 => ui.set_tela(ss("tg-login")),
         _ => ui.set_tela(ss("musica-conf")),
     }
 }
@@ -462,7 +504,7 @@ fn tecla(ui: &AppWindow, t: &str) {
         "⌫" => EST.with_borrow_mut(|e| {
             e.texto.pop();
         }),
-        "Conectar" | "Buscar" | "OK" => return confirmar(ui),
+        "Conectar" | "Buscar" | "OK" | "Enviar" => return confirmar(ui),
         letra => EST.with_borrow_mut(|e| {
             e.texto.push_str(letra);
             e.shift = false;
@@ -505,6 +547,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     }
     if tela == "cripto" {
         carregar_cripto(ui);
+    }
+    if tela == "telegram" {
+        return abrir_telegram(ui);
     }
     if tela == "musica-conf" {
         abrir_conf(ui);
@@ -636,6 +681,126 @@ fn mus_navegar(ui: &AppWindow, k: &str) {
         "aleatorias" => musica_abrir(ui, "aleatorias"),
         "ajustes" => ir(ui, "musica-conf"),
         _ => ir(ui, "inicio"),
+    }
+}
+
+// ---------------------------------------------------------------- telegram
+
+thread_local! {
+    static TG: RefCell<Option<tokio::sync::mpsc::UnboundedSender<telegram::Cmd>>> = RefCell::default();
+    static TG_ESTADO: RefCell<String> = RefCell::default();
+    static TG_BOLHAS: RefCell<Option<Rc<VecModel<Bolha>>>> = RefCell::default();
+}
+
+/// Mostra uma lista já pronta (sem buscar nada), na tela de lista paginada.
+fn mostrar_direto(ui: &AppWindow, titulo: &str, itens: Vec<ItemDados>) {
+    EST.with_borrow_mut(|e| {
+        let pagina = if e.lista.titulo == titulo { e.lista.pagina } else { 0 };
+        e.lista = Lista { titulo: titulo.into(), itens, pagina, vazio: "nada aqui".into() };
+    });
+    ui.set_tela(ss("lista"));
+    mostrar_lista(ui);
+}
+
+fn tg_cmd(c: telegram::Cmd) {
+    TG.with_borrow(|t| {
+        if let Some(t) = t {
+            let _ = t.send(c);
+        }
+    });
+}
+
+fn bolha(m: &telegram::Msg) -> Bolha {
+    Bolha { texto: ss(m.texto.clone()), minha: m.minha, hora: ss(m.hora.clone()) }
+}
+
+/// Mostra o passo de login (ou a lista, se já está logado).
+fn tg_mostrar_estado(ui: &AppWindow) {
+    let estado = TG_ESTADO.with_borrow(|e| e.clone());
+    let (msg, botao) = match estado.as_str() {
+        "" => ("conectando ao Telegram...".to_string(), ""),
+        "sem-conf" => ("Falta /etc/revive/telegram.conf (api_id e api_hash do my.telegram.org).".into(), ""),
+        "telefone" => ("Entre com a sua conta: toque em Digitar e escreva o telefone com DDI.".into(), "Digitar"),
+        "codigo" => ("O Telegram mandou um código para a sua conta. Toque em Digitar.".into(), "Digitar"),
+        "senha" => ("A conta tem verificação em duas etapas. Digite a senha.".into(), "Digitar"),
+        "pronto" => ("carregando conversas...".into(), ""),
+        erro => (erro.to_string(), "Digitar"),
+    };
+    ui.set_tg_mensagem(ss(msg));
+    ui.set_tg_botao(ss(botao));
+}
+
+fn abrir_telegram(ui: &AppWindow) {
+    if TG.with_borrow(|t| t.is_none()) {
+        let fraca = ui.as_weak();
+        let tx = telegram::iniciar(move |ev| {
+            let _ = fraca.upgrade_in_event_loop(move |ui| tg_evento(&ui, ev));
+        });
+        TG.with_borrow_mut(|t| *t = Some(tx));
+    }
+    EST.with_borrow_mut(|e| {
+        e.pilha.clear();
+        e.origem = "inicio".into();
+    });
+    if TG_ESTADO.with_borrow(|e| e == "pronto") {
+        mostrar_direto(ui, "Telegram", vec![]);
+        EST.with_borrow_mut(|e| e.lista.vazio = "carregando conversas...".into());
+        mostrar_lista(ui);
+        tg_cmd(telegram::Cmd::Conversas);
+    } else {
+        tg_mostrar_estado(ui);
+        ui.set_tela(ss("tg-login"));
+    }
+}
+
+fn tg_evento(ui: &AppWindow, ev: telegram::Evento) {
+    let tela = ui.get_tela();
+    match ev {
+        telegram::Evento::Estado(s) => {
+            let pronto = s == "pronto";
+            TG_ESTADO.with_borrow_mut(|e| *e = s);
+            if tela == "tg-login" {
+                tg_mostrar_estado(ui);
+                if pronto {
+                    abrir_telegram(ui);
+                }
+            }
+        }
+        telegram::Evento::Conversas(v) => {
+            let no_telegram = tela == "tg-login" || (tela == "lista" && ui.get_lista_titulo() == "Telegram");
+            if !no_telegram {
+                return;
+            }
+            let itens: Vec<ItemDados> = v
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ItemDados {
+                    titulo: if c.nao_lidas > 0 { format!("({}) {}", c.nao_lidas, c.nome) } else { c.nome.clone() },
+                    sub: c.previa.replace('\n', " "),
+                    verde: c.nao_lidas > 0,
+                    acao: Acao::TgAbrir(i),
+                })
+                .collect();
+            mostrar_direto(ui, "Telegram", itens);
+        }
+        telegram::Evento::Chat(nome, msgs) => {
+            let m = Rc::new(VecModel::from(msgs.iter().map(bolha).collect::<Vec<_>>()));
+            TG_BOLHAS.with_borrow_mut(|b| *b = Some(m.clone()));
+            ui.set_tg_nome(ss(curto(&nome, 40)));
+            ui.set_tg_bolhas(ModelRc::from(m));
+            ui.set_tela(ss("tg-chat"));
+        }
+        telegram::Evento::Nova(da_aberta, nome, m) => {
+            if da_aberta && (tela == "tg-chat" || tela == "teclado") {
+                TG_BOLHAS.with_borrow(|b| {
+                    if let Some(b) = b {
+                        b.push(bolha(&m));
+                    }
+                });
+            } else if !m.minha {
+                ui.set_aviso(ss(curto(&format!("✉ {nome}: {}", m.texto.replace('\n', " ")), 60)));
+            }
+        }
     }
 }
 
@@ -1091,6 +1256,21 @@ pub fn ligar(ui: &AppWindow) {
             tocar(&ui, faixas, 0);
         }
     });
+    let f = ui.as_weak();
+    ui.on_tg_digitar(move || {
+        if let Some(ui) = f.upgrade() {
+            let passo = TG_ESTADO.with_borrow(|e| match e.as_str() {
+                "codigo" => "codigo",
+                "senha" => "senha",
+                _ => "telefone",
+            });
+            abrir_teclado(&ui, Modo::Tg(passo.into()));
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_tg_escrever(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Tg("mensagem".into()))));
+    let f = ui.as_weak();
+    ui.on_tg_voltar(move || f.upgrade().iter().for_each(abrir_telegram));
     let f = ui.as_weak();
     ui.on_conf_campo(move |c| f.upgrade().iter().for_each(|ui| editar_campo(ui, c.to_string())));
     let f = ui.as_weak();
