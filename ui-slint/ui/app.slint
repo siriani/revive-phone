@@ -28,15 +28,15 @@ export global Cores {
 
 export component Botao inherits Rectangle {
     in property <string> texto;
-    in property <color> cor: Cores.tecla;
+    in property <color> cor: Tema.superficie-alta;
     in property <length> fonte: 34px;
     callback clicado;
-    border-radius: 18px;
-    // acende enquanto o dedo está em cima: resposta imediata, antes de soltar
-    background: toque.pressed ? cor.brighter(40%) : cor;
+    // pílula/arredondado do Material 3; acende enquanto o dedo está em cima
+    border-radius: min(self.height / 2, 32px);
+    background: toque.pressed ? cor.mix(Tema.texto, 0.82) : cor;
     Text {
         text: root.texto;
-        color: Cores.texto;
+        color: root.cor == Tema.destaque ? Tema.sobre-destaque : Tema.texto;
         font-size: root.fonte;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -44,6 +44,7 @@ export component Botao inherits Rectangle {
     toque := TouchArea {
         clicked => { root.clicado(); }
     }
+    @children
 }
 
 component Cartao inherits Rectangle {
@@ -129,11 +130,15 @@ component Lancador inherits Rectangle {
         y: 115px + floor(i / 4) * 250px;
         width: 290px;
         height: 230px;
-        border-radius: 28px;
-        background: toque.pressed ? a.cor.brighter(40%) : a.cor;
-        Text { y: 25px; width: parent.width; text: a.icone; font-size: 96px; color: Cores.texto;
-               horizontal-alignment: center; }
-        Text { y: 165px; width: parent.width; text: a.nome; font-size: 34px; color: Cores.texto;
+        // cartão do Material com o ícone do app num círculo na cor dele
+        border-radius: Tema.raio-g;
+        background: toque.pressed ? Tema.superficie-alta : Tema.superficie;
+        Rectangle {
+            x: (parent.width - 124px) / 2; y: 20px; width: 124px; height: 124px; border-radius: 62px;
+            background: a.cor;
+            Text { text: a.icone; font-size: 64px; color: Colors.white; }
+        }
+        Text { x: 0; y: 162px; width: parent.width; text: a.nome; font-size: 34px; color: Tema.texto;
                horizontal-alignment: center; }
         toque := TouchArea { clicked => { root.abrir(a.id); } }
     }
@@ -163,19 +168,6 @@ component Celula inherits Rectangle {
     border-radius: 18px;
 }
 
-component Rodape inherits Rectangle {
-    in property <string> esquerda: "Voltar";
-    in property <string> direita;
-    callback clicou-esquerda;
-    callback clicou-direita;
-    y: 620px;  // 720 - 100: rodapé da tela
-    height: 80px;
-    Botao { x: 30px; width: root.direita == "" ? 1220px : 602px; height: 80px; texto: root.esquerda;
-            clicado => { root.clicou-esquerda(); } }
-    if root.direita != "": Botao { x: 648px; width: 602px; height: 80px; texto: root.direita;
-            clicado => { root.clicou-direita(); } }
-}
-
 component Titulo inherits Text {
     y: 20px;
     width: 1280px;
@@ -185,6 +177,25 @@ component Titulo inherits Text {
     horizontal-alignment: center;
 }
 
+// ------------------------------------------------- molde padrão de app
+
+// Toda tela de app começa com esta barra (AppBar do Material): voltar + título + ação.
+component BarraApp inherits Rectangle {
+    in property <string> titulo;
+    in property <image> acao;            // ícone da ação da direita (vazio = sem ação)
+    callback voltar();
+    callback acionar();
+    x: 0; y: 0; width: 1280px; height: barra.min-height;
+    barra := AppBar {
+        width: parent.width;
+        title: root.titulo;
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        trailing_button: { icon: root.acao, enabled: root.acao.width > 0 };
+        leading_button_clicked => { root.voltar(); }
+        trailing_button_clicked => { root.acionar(); }
+    }
+}
+
 // ------------------------------------------------------------------- Wi-Fi
 
 component TelaWifi inherits Rectangle {
@@ -192,7 +203,7 @@ component TelaWifi inherits Rectangle {
     callback escolher(string, bool);
     callback procurar();
     callback voltar();
-    Titulo { text: "Redes Wi-Fi"; }
+    BarraApp { titulo: "Redes Wi-Fi"; acao: @image-url("icones/refresh.svg"); voltar => { root.voltar(); } acionar => { root.procurar(); } }
     if root.redes.length == 0: Text { y: 300px; width: 1280px; text: "procurando..."; font-size: 34px;
                                       color: Cores.apagado; horizontal-alignment: center; }
     for r[i] in root.redes: Celula {
@@ -214,8 +225,6 @@ component TelaWifi inherits Rectangle {
         }
         toque := TouchArea { clicked => { root.escolher(r.ssid, r.segura); } }
     }
-    Rodape { width: parent.width; direita: "Procurar"; clicou-esquerda => { root.voltar(); }
-             clicou-direita => { root.procurar(); } }
 }
 
 // ---------------------------------------------------------- teclado na tela
@@ -253,7 +262,7 @@ component TelaBt inherits Rectangle {
     callback acao(string, string);
     callback procurar();
     callback voltar();
-    Titulo { text: "Bluetooth"; }
+    BarraApp { titulo: "Bluetooth"; acao: @image-url("icones/refresh.svg"); voltar => { root.voltar(); } acionar => { root.procurar(); } }
     if root.aparelhos.length == 0: Text {
         y: 300px; width: 1280px; font-size: 34px; color: Cores.apagado; horizontal-alignment: center;
         text: !root.pronto ? "Bluetooth iniciando..." : root.procurando ? "procurando..." : "toque em Procurar";
@@ -275,12 +284,10 @@ component TelaBt inherits Rectangle {
         if a.pareado: Botao { x: parent.width - 85px; y: 20px; width: 65px; height: 70px; texto: "✕";
                               clicado => { root.acao("remove", a.mac); } }
         if a.conectado && a.som: Botao { x: parent.width - 165px; y: 20px; width: 65px; height: 70px;
-                                         texto: "♪"; cor: #286e46; clicado => { root.acao("som", a.mac); } }
+                                         texto: "♪"; cor: Tema.destaque; clicado => { root.acao("som", a.mac); } }
     }
     if root.mensagem != "": Text { y: parent.height - 145px; width: 1280px; text: root.mensagem;
                                    font-size: 26px; color: Cores.apagado; horizontal-alignment: center; }
-    Rodape { width: parent.width; direita: root.procurando ? "procurando..." : "Procurar";
-             clicou-esquerda => { root.voltar(); } clicou-direita => { root.procurar(); } }
 }
 
 // ------------------------------------------------------------------ música
@@ -290,8 +297,8 @@ component TelaMusica inherits Rectangle {
     in property <bool> configurado;
     callback abrir(string);
     callback voltar();
-    Titulo { text: "Música"; }
-    Botao { x: 1030px; y: 12px; width: 220px; height: 64px; fonte: 26px; texto: "⚙ Configurar";
+    BarraApp { titulo: "Música"; voltar => { root.voltar(); } }
+    Botao { x: 1030px; y: 16px; width: 220px; height: 64px; fonte: 26px; texto: "⚙ Configurar";
             clicado => { root.abrir("config"); } }
     if !root.configurado: Text { y: 300px; width: 1280px; text: "sem /etc/revive/navidrome.conf";
                                  font-size: 26px; color: Cores.ruim; horizontal-alignment: center; }
@@ -310,20 +317,18 @@ component TelaMusica inherits Rectangle {
         x: 30px + (i >= 4 ? 617px : 0px); y: 95px + mod(i, 4) * 124px; width: 603px; height: 110px;
         texto: o.nome; cor: Cores.cartao; clicado => { root.abrir(o.chave); }
     }
-    Rodape { width: parent.width; clicou-esquerda => { root.voltar(); } }
 }
 
 component TelaLetras inherits Rectangle {
     callback letra(string);
     callback voltar();
-    Titulo { text: "Artistas"; }
+    BarraApp { titulo: "Artistas"; voltar => { root.voltar(); } }
     property <[string]> letras: ["A","B","C","D","E","F","G","H","I","J","K","L","M","N",
                                  "O","P","Q","R","S","T","U","V","W","X","Y","Z","#"];
     for l[i] in root.letras: Botao {
         x: 30px + mod(i, 9) * 137px; y: 95px + floor(i / 9) * 162px; width: 125px; height: 150px;
         texto: l; fonte: 44px; clicado => { root.letra(l); }
     }
-    Rodape { width: parent.width; clicou-esquerda => { root.voltar(); } }
 }
 
 component TelaLista inherits Rectangle {
@@ -335,19 +340,17 @@ component TelaLista inherits Rectangle {
     callback item(int);
     callback pagina-mudar(int);
     callback voltar();
-    Titulo { text: root.titulo; }
+    BarraApp { titulo: root.titulo; voltar => { root.voltar(); } }
     if root.itens.length == 0: Text { y: 300px; width: 1280px; text: root.vazio; font-size: 34px;
                                       color: Cores.apagado; horizontal-alignment: center; }
     for it[i] in root.itens: Celula {
         indice: i;
-        background: toque.pressed ? (it.verde ? #286e46 : Cores.cartao).brighter(40%)
-                                  : (it.verde ? #286e46 : Cores.cartao);
+        background: toque.pressed ? (it.verde ? Tema.destaque-suave : Cores.cartao).brighter(40%)
+                                  : (it.verde ? Tema.destaque-suave : Cores.cartao);
         Text { x: 25px; y: it.sub == "" ? 35px : 18px; text: it.titulo; font-size: 34px; color: Cores.texto; }
         if it.sub != "": Text { x: 25px; y: 66px; text: it.sub; font-size: 26px; color: Cores.apagado; }
         toque := TouchArea { clicked => { root.item(i); } }
     }
-    Botao { x: 30px; y: parent.height - 100px; width: 370px; height: 80px; texto: "Voltar";
-            clicado => { root.voltar(); } }
     if root.paginas > 1: Text { x: 600px; y: parent.height - 85px; width: 150px;
             text: (root.pagina + 1) + "/" + root.paginas; font-size: 26px; color: Cores.apagado;
             horizontal-alignment: center; }
@@ -442,7 +445,7 @@ component BarraTocando inherits Rectangle {
     callback controle(string);
     callback abrir();
     x: 0; y: 640px; width: 1280px; height: 80px;
-    background: #161b22;
+    background: Tema.superficie;
     if !root.ativo: Text { x: 30px; height: 80px; vertical-alignment: center; text: "nada tocando";
                            font-size: 26px; color: Cores.apagado; }
     if root.ativo: Rectangle {
@@ -458,7 +461,7 @@ component BarraTocando inherits Rectangle {
     if root.ativo: Botao { x: 940px; y: 8px; width: 100px; height: 64px; texto: "◀◀"; fonte: 26px;
                            clicado => { root.controle("anterior"); } }
     if root.ativo: Botao { x: 1055px; y: 8px; width: 100px; height: 64px; texto: root.pausa ? "▶" : "❚❚";
-                           cor: #286e46; clicado => { root.controle("pausar"); } }
+                           cor: Tema.destaque; clicado => { root.controle("pausar"); } }
     if root.ativo: Botao { x: 1170px; y: 8px; width: 100px; height: 64px; texto: "▶▶"; fonte: 26px;
                            clicado => { root.controle("proxima"); } }
 }
@@ -479,7 +482,7 @@ component FileiraAlbuns inherits Rectangle {
                         Text { text: "♫"; font-size: 44px; color: Cores.apagado; }
                         Image { width: 175px; height: 175px; source: a.capa; image-fit: cover; } }
             if toque.pressed: Rectangle { x: 0; y: 0; width: 175px; height: 175px; border-radius: 10px;
-                                          background: #ffffff40; }
+                                          background: Tema.toque; }
             Text { y: 182px; width: 175px; text: a.nome; font-size: 26px; color: Cores.texto; overflow: elide; }
             Text { y: 214px; width: 175px; text: a.artista; font-size: 26px; color: Cores.apagado; overflow: elide; }
             toque := TouchArea { clicked => { root.abrir(i); } }
@@ -497,14 +500,14 @@ component MusicaInicio inherits Rectangle {
     callback navegar(string);
     // barra lateral (x/y explícitos: no Slint, sem eles o elemento fica centralizado no pai)
     Rectangle {
-        x: 0; y: 0; width: 210px; height: 640px; background: #0a0d11;
+        x: 0; y: 0; width: 210px; height: 640px; background: Tema.superficie-baixa;
         property <[{t: string, k: string}]> itens: [
             {t: "Início", k: "home"}, {t: "Buscar", k: "buscar"}, {t: "Artistas", k: "artistas"},
             {t: "Playlists", k: "playlists"}, {t: "Aleatórias", k: "aleatorias"}, {t: "⚙ Ajustes", k: "ajustes"},
             {t: "◀ Revive", k: "revive"}
         ];
         for n[i] in self.itens: Botao { x: 12px; y: 14px + i * 87px; width: 186px; height: 74px; texto: n.t;
-                                        fonte: 26px; cor: #0a0d11; clicado => { root.navegar(n.k); } }
+                                        fonte: 26px; cor: Tema.superficie-baixa; clicado => { root.navegar(n.k); } }
     }
     if root.mensagem != "": Text { x: 210px; y: 280px; width: 1070px; text: root.mensagem; font-size: 34px;
                                    color: Cores.apagado; horizontal-alignment: center; }
@@ -538,7 +541,7 @@ component MusicaAlbum inherits Rectangle {
            color: Cores.texto; overflow: elide; }
     Text { x: 30px; y: 336px; width: 300px; text: root.artista; font-size: 26px; color: Cores.apagado; overflow: elide; }
     Text { x: 30px; y: 372px; width: 300px; text: root.info; font-size: 26px; color: Cores.apagado; overflow: elide; }
-    Botao { x: 30px; y: 420px; width: 300px; height: 64px; texto: "▶ Tocar"; cor: #286e46;
+    Botao { x: 30px; y: 420px; width: 300px; height: 64px; texto: "▶ Tocar"; cor: Tema.destaque;
             clicado => { root.tocar(0); } }
     Botao { x: 30px; y: 495px; width: 300px; height: 60px; texto: "Aleatório"; fonte: 26px;
             clicado => { root.aleatorio(); } }
@@ -728,25 +731,6 @@ component TelaFoto inherits Rectangle {
     }
 }
 
-// ------------------------------------------------- molde padrão de app
-
-// Toda tela de app começa com esta barra (AppBar do Material): voltar + título + ação.
-component BarraApp inherits Rectangle {
-    in property <string> titulo;
-    in property <image> acao;            // ícone da ação da direita (vazio = sem ação)
-    callback voltar();
-    callback acionar();
-    x: 0; y: 0; width: 1280px; height: barra.min-height;
-    barra := AppBar {
-        width: parent.width;
-        title: root.titulo;
-        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
-        trailing_button: { icon: root.acao, enabled: root.acao.width > 0 };
-        leading_button_clicked => { root.voltar(); }
-        trailing_button_clicked => { root.acionar(); }
-    }
-}
-
 // ------------------------------------------------------------------ ajustes
 
 component CartaoOpcao inherits Rectangle {
@@ -829,7 +813,7 @@ component TelaConfMusica inherits Rectangle {
     callback campo(string);
     callback salvar();
     callback voltar();
-    Titulo { text: "Navidrome"; }
+    BarraApp { titulo: "Navidrome"; acao: @image-url("icones/check.svg"); voltar => { root.voltar(); } acionar => { root.salvar(); } }
     property <[{rotulo: string, chave: string, valor: string}]> campos: [
         {rotulo: "Endereços (URL; vários separados por espaço: casa e fora)", chave: "url", valor: root.url},
         {rotulo: "Usuário", chave: "usuário", valor: root.usuario},
@@ -843,10 +827,10 @@ component TelaConfMusica inherits Rectangle {
                font-size: 34px; color: c.valor == "" ? Cores.apagado : Cores.texto; overflow: elide; }
         toque := TouchArea { clicked => { root.campo(c.chave); } }
     }
+    FilledButton { x: 440px; y: 600px; width: 400px; height: 80px; text: "Testar e salvar";
+                   icon: @image-url("icones/check.svg"); clicked => { root.salvar(); } }
     if root.mensagem != "": Text { y: 505px; width: 1280px; text: root.mensagem; font-size: 34px;
                                    color: Cores.apagado; horizontal-alignment: center; }
-    Rodape { width: parent.width; direita: "Testar e salvar"; clicou-esquerda => { root.voltar(); }
-             clicou-direita => { root.salvar(); } }
 }
 
 // ------------------------------------------------------------------- cripto
@@ -864,8 +848,8 @@ component TelaCripto inherits Rectangle {
     callback atualizar();
     callback voltar();
     callback trocar-moeda();
-    Titulo { text: "Cripto · 24 h"; }
-    Botao { x: 1030px; y: 12px; width: 220px; height: 64px; fonte: 26px;
+    BarraApp { titulo: "Cripto · 24 h"; acao: @image-url("icones/refresh.svg"); voltar => { root.voltar(); } acionar => { root.atualizar(); } }
+    Botao { x: 880px; y: 16px; width: 200px; height: 64px; fonte: 26px;
             texto: root.moeda == "usd" ? "US$ → R$" : "R$ → US$";
             clicado => { root.trocar-moeda(); } }
     if root.moedas.length == 0: Text { y: 300px; width: 1280px; text: root.mensagem; font-size: 34px;
@@ -877,19 +861,17 @@ component TelaCripto inherits Rectangle {
         height: 240px;
         border-radius: 24px;
         // mosaico: verde se subiu nas últimas 24 h, vermelho se caiu
-        background: toque.pressed ? (m.subiu ? #2f8a55 : #9a3540) : (m.subiu ? #1e5c38 : #6e2229);
+        background: toque.pressed ? (m.subiu ? #2e9a58 : #d0473e) : (m.subiu ? #1e7a44 : #b3261e);
         Image { x: 20px; y: 20px; width: 64px; height: 64px; source: m.icone; }
         Text { x: 100px; y: 18px; text: m.simbolo; font-size: 34px; font-family: "DejaVu Sans Bold";
-               color: Cores.texto; }
-        Text { x: 100px; y: 58px; width: 180px; text: m.nome; font-size: 26px; color: Cores.texto;
+               color: Colors.white; }
+        Text { x: 100px; y: 58px; width: 180px; text: m.nome; font-size: 26px; color: Colors.white;
                overflow: elide; }
         Text { x: 20px; y: 110px; width: 260px; text: m.preco; font-size: 34px;
-               font-family: "DejaVu Sans Bold"; color: Cores.texto; overflow: elide; }
-        Text { x: 20px; y: 170px; text: m.variacao; font-size: 34px; color: Cores.texto; }
+               font-family: "DejaVu Sans Bold"; color: Colors.white; overflow: elide; }
+        Text { x: 20px; y: 170px; text: m.variacao; font-size: 34px; color: Colors.white; }
         toque := TouchArea { clicked => { root.abrir(m.id, m.nome); } }
     }
-    Rodape { width: parent.width; direita: "Atualizar"; clicou-esquerda => { root.voltar(); }
-             clicou-direita => { root.atualizar(); } }
 }
 
 component TelaGrafico inherits Rectangle {
@@ -904,7 +886,7 @@ component TelaGrafico inherits Rectangle {
     property <length> gy: 90px;
     property <length> gw: 1200px;
     property <length> gh: 470px;
-    Titulo { text: root.titulo; }
+    BarraApp { titulo: root.titulo; voltar => { root.voltar(); } }
     Rectangle { x: root.gx; y: root.gy; width: root.gw; height: root.gh; border-radius: 12px;
                 background: Cores.cartao; }
     if root.velas.length == 0: Text { y: 300px; width: 1280px; text: root.info; font-size: 34px;
@@ -931,7 +913,6 @@ component TelaGrafico inherits Rectangle {
                                      font-size: 26px; color: Cores.apagado; }
     if root.velas.length > 0: Text { x: 0; y: 572px; width: 1280px; text: root.info; font-size: 34px;
                                      color: root.subiu ? Cores.bom : Cores.ruim; horizontal-alignment: center; }
-    Rodape { width: parent.width; clicou-esquerda => { root.voltar(); } }
 }
 
 component Prompt inherits Rectangle {
