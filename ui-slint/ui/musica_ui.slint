@@ -5,6 +5,7 @@
 import { AppBar, FloatingActionButton, FABStyle, Slider } from "@material";
 import { Tema } from "tema.slint";
 
+export struct Album { id: string, nome: string, artista: string, capa: image }
 export struct FilaItem { titulo: string, artista: string, tocando: bool }
 
 // Botão de ícone próprio (o IconButton do Material não aceita cor), 72x72 com ícone tingido.
@@ -37,43 +38,44 @@ component BotaoIcone inherits Rectangle {
     }
 }
 
-// Item do trilho de navegação: pílula (indicador M3) atrás do ícone + rótulo embaixo.
+// Item do trilho de navegação (Material 3): pílula 64x36 atrás do ícone 40px + rótulo 24px.
 component ItemTrilho inherits Rectangle {
     in property <image> icone;
     in property <string> rotulo;
     in property <bool> ativo;
     callback clicado();
 
-    width: 128px;
-    height: 104px;
+    width: 120px;
+    height: 84px;
     background: #00000000;
 
     Rectangle {
-        x: 32px;
-        y: 8px;
+        x: 28px;
+        y: 6px;
         width: 64px;
-        height: 40px;
-        border-radius: 20px;
+        height: 36px;
+        border-radius: 18px;
         background: root.ativo ? Tema.destaque-suave : #00000000;
     }
 
     Image {
-        x: 50px;
-        y: 14px;
-        width: 28px;
-        height: 28px;
+        x: 40px;
+        y: 4px;
+        width: 40px;
+        height: 40px;
         source: root.icone;
-        colorize: root.ativo ? Tema.texto : Tema.texto-sec;
+        colorize: root.ativo ? Tema.sobre-destaque-suave : Tema.texto-sec;
         image-fit: contain;
     }
 
     Text {
         x: 0px;
-        y: 56px;
-        width: 128px;
-        height: 40px;
+        y: 48px;
+        width: 120px;
+        height: 32px;
         text: root.rotulo;
-        font-size: Tema.texto-corpo;
+        font-size: 24px;
+        font-family: root.ativo ? "DejaVu Sans Bold" : "DejaVu Sans";
         color: root.ativo ? Tema.texto : Tema.texto-sec;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -448,17 +450,25 @@ export component TelaFila inherits Rectangle {
 
 // ---------------------------------------------------------------- trilho
 
+// trilho lateral 120x720: voltar, seis destinos no topo e Ajustes fixo no rodapé
 export component RailMusica inherits Rectangle {
     in property <string> atual;
     callback ir(string);
 
-    width: 128px;
+    width: 120px;
     height: 720px;
-    background: Tema.superficie;
+    background: Tema.superficie-baixa;
+
+    BotaoIcone {
+        x: 24px;
+        y: 8px;
+        icone: @image-url("icones/arrow_back.svg");
+        clicado => { root.ir("revive"); }
+    }
 
     ItemTrilho {
         x: 0px;
-        y: 16px;
+        y: 96px;
         icone: @image-url("icones/home.svg");
         rotulo: "Início";
         ativo: root.atual == "home";
@@ -467,16 +477,7 @@ export component RailMusica inherits Rectangle {
 
     ItemTrilho {
         x: 0px;
-        y: 120px;
-        icone: @image-url("icones/library_music.svg");
-        rotulo: "Biblioteca";
-        ativo: root.atual == "biblioteca";
-        clicado => { root.ir("biblioteca"); }
-    }
-
-    ItemTrilho {
-        x: 0px;
-        y: 224px;
+        y: 180px;
         icone: @image-url("icones/search.svg");
         rotulo: "Buscar";
         ativo: root.atual == "buscar";
@@ -485,7 +486,34 @@ export component RailMusica inherits Rectangle {
 
     ItemTrilho {
         x: 0px;
-        y: 328px;
+        y: 264px;
+        icone: @image-url("icones/person.svg");
+        rotulo: "Artistas";
+        ativo: root.atual == "artistas";
+        clicado => { root.ir("artistas"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 348px;
+        icone: @image-url("icones/library_music.svg");
+        rotulo: "Playlists";
+        ativo: root.atual == "playlists";
+        clicado => { root.ir("playlists"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 432px;
+        icone: @image-url("icones/favorite.svg");
+        rotulo: "Favoritas";
+        ativo: root.atual == "favoritas";
+        clicado => { root.ir("favoritas"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 516px;
         icone: @image-url("icones/queue_music.svg");
         rotulo: "Fila";
         ativo: root.atual == "fila";
@@ -494,10 +522,517 @@ export component RailMusica inherits Rectangle {
 
     ItemTrilho {
         x: 0px;
-        y: 432px;
+        y: 630px;
         icone: @image-url("icones/settings.svg");
         rotulo: "Ajustes";
         ativo: root.atual == "ajustes";
         clicado => { root.ir("ajustes"); }
+    }
+}
+
+// ---------------------------------------------------------------- mini player
+
+// cartão "tocando agora" flutuante (altura 84px; largura definida por quem usa)
+export component MiniPlayer inherits Rectangle {
+    in property <bool> ativo;
+    in property <string> titulo;
+    in property <string> artista;
+    in property <image> capa;
+    in property <bool> pausa;
+    in property <float> progresso;
+    callback controle(string);
+    callback abrir();
+
+    height: 84px;
+    border-radius: 20px;
+    background: Tema.superficie-alta;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: #0006;
+    drop-shadow-offset-y: 2px;
+    visible: root.ativo;
+
+    // toque no cartão inteiro; os botões (declarados depois) ficam por cima
+    TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.abrir(); }
+    }
+
+    Rectangle {
+        x: 10px;
+        y: 10px;
+        width: 64px;
+        height: 64px;
+        border-radius: 10px;
+        clip: true;
+        background: Tema.superficie;
+        Image {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            source: root.capa;
+            image-fit: cover;
+        }
+    }
+
+    Text {
+        x: 88px;
+        y: 12px;
+        width: root.width - 260px;
+        height: 34px;
+        text: root.titulo;
+        font-size: 26px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 88px;
+        y: 46px;
+        width: root.width - 260px;
+        height: 28px;
+        text: root.artista;
+        font-size: 21px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    BotaoIcone {
+        x: root.width - 164px;
+        y: 4px;
+        icone: root.pausa ? @image-url("icones/play_arrow.svg") : @image-url("icones/pause.svg");
+        cor: Tema.texto;
+        clicado => { root.controle("pausar"); }
+    }
+
+    BotaoIcone {
+        x: root.width - 88px;
+        y: 4px;
+        icone: @image-url("icones/skip_next.svg");
+        cor: Tema.texto;
+        clicado => { root.controle("proxima"); }
+    }
+
+    // progresso: linha de 4px no rodapé interno
+    Rectangle {
+        x: 20px;
+        y: 76px;
+        width: (root.width - 40px) * max(0, min(1, root.progresso));
+        height: 4px;
+        border-radius: 2px;
+        background: Tema.destaque;
+    }
+}
+
+// ---------------------------------------------------------------- início (Material)
+
+// chip de ação do cabeçalho: pílula com contorno, ícone 28px + texto 24px
+component Chip inherits Rectangle {
+    in property <image> icone;
+    in property <string> texto;
+    callback clicado();
+
+    height: 52px;
+    border-radius: 26px;
+    border-width: 1px;
+    border-color: Tema.contorno;
+    background: toque.pressed ? Tema.superficie-alta : #00000000;
+
+    Image {
+        x: 20px;
+        y: 12px;
+        width: 28px;
+        height: 28px;
+        source: root.icone;
+        colorize: Tema.texto;
+        image-fit: contain;
+    }
+
+    Text {
+        x: 58px;
+        y: 0px;
+        width: root.width - 78px;
+        height: 52px;
+        text: root.texto;
+        font-size: 24px;
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.clicado(); }
+    }
+}
+
+// prateleira horizontal de capas 200x200; some (altura 0) quando a lista está vazia
+component Prateleira inherits Rectangle {
+    in property <string> titulo;
+    in property <[Album]> albuns;
+    callback abrir(int);
+
+    height: root.albuns.length > 0 ? 346px : 0px;
+    clip: true;
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 44px;
+        text: root.titulo;
+        font-size: 34px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Flickable {
+        x: 0px;
+        y: 52px;
+        width: parent.width;
+        height: 270px;
+        content-width: max(parent.width, root.albuns.length * 220px);
+        content-height: 270px;
+
+        for a[i] in root.albuns: Rectangle {
+            x: i * 220px;
+            y: 0px;
+            width: 200px;
+            height: 270px;
+
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 200px;
+                height: 200px;
+                border-radius: 16px;
+                clip: true;
+                background: Tema.superficie;
+                Image {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    source: a.capa;
+                    image-fit: cover;
+                }
+            }
+
+            if toque.pressed: Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 200px;
+                height: 200px;
+                border-radius: 16px;
+                background: Tema.toque;
+            }
+
+            Text {
+                x: 0px;
+                y: 208px;
+                width: 200px;
+                height: 30px;
+                text: a.nome;
+                font-size: 24px;
+                font-family: "DejaVu Sans Bold";
+                color: Tema.texto;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 0px;
+                y: 240px;
+                width: 200px;
+                height: 26px;
+                text: a.artista;
+                font-size: 21px;
+                color: Tema.texto-sec;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+
+            toque := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.abrir(i); }
+            }
+        }
+    }
+}
+
+// tela inicial de música: trilho à esquerda, conteúdo rolável à direita (x 120..1280)
+export component MusicaInicioMat inherits Rectangle {
+    in property <[Album]> recentes;
+    in property <[Album]> frequentes;
+    in property <[Album]> novidades;
+    in property <[Album]> aleatorios;
+    in property <string> mensagem;
+    in property <string> saudacao: "Olá";
+    in property <bool> toc-ativo;
+    callback abrir-album(string, int);
+    callback navegar(string);
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    RailMusica {
+        x: 0px;
+        y: 0px;
+        atual: "home";
+        ir(k) => { root.navegar(k); }
+    }
+
+    Flickable {
+        x: 120px;
+        y: 0px;
+        width: 1160px;
+        height: 720px;
+        visible: root.mensagem == "";
+        content-width: 1160px;
+        // folga no fim para o MiniPlayer não cobrir a última prateleira
+        content-height: s3.y + s3.height + 24px + (root.toc-ativo ? 110px : 0px);
+
+        // cabeçalho
+        Text {
+            x: 32px;
+            y: 24px;
+            width: 640px;
+            height: 56px;
+            text: root.saudacao;
+            font-size: 44px;
+            font-family: "DejaVu Sans Bold";
+            color: Tema.texto;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+
+        Chip {
+            x: 692px;
+            y: 26px;
+            width: 220px;
+            icone: @image-url("icones/shuffle.svg");
+            texto: "Aleatórias";
+            clicado => { root.navegar("aleatorias"); }
+        }
+
+        Chip {
+            x: 928px;
+            y: 26px;
+            width: 200px;
+            icone: @image-url("icones/favorite.svg");
+            texto: "Favoritas";
+            clicado => { root.navegar("favoritas"); }
+        }
+
+        // acesso rápido: grade 3x2 com os seis primeiros de recentes
+        Text {
+            x: 32px;
+            y: 104px;
+            width: 1096px;
+            height: 44px;
+            visible: root.recentes.length > 0;
+            text: "Acesso rápido";
+            font-size: 34px;
+            font-family: "DejaVu Sans Bold";
+            color: Tema.texto;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            x: 32px;
+            y: 160px;
+            width: 1096px;
+            height: root.recentes.length > 0 ? 192px : 0px;
+
+            for a[i] in root.recentes: Rectangle {
+                x: mod(i, 3) * 370px;
+                y: floor(i / 3) * 104px;
+                width: 354px;
+                height: 88px;
+                visible: i < 6;
+                border-radius: 12px;
+                clip: true;
+                background: toque.pressed ? Tema.superficie-alta : Tema.superficie;
+
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: 88px;
+                    height: 88px;
+                    border-radius: 12px;
+                    clip: true;
+                    background: Tema.superficie-alta;
+                    Image {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.height;
+                        source: a.capa;
+                        image-fit: cover;
+                    }
+                }
+
+                Text {
+                    x: 100px;
+                    y: 14px;
+                    width: 242px;
+                    height: 34px;
+                    text: a.nome;
+                    font-size: 24px;
+                    font-family: "DejaVu Sans Bold";
+                    color: Tema.texto;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    x: 100px;
+                    y: 50px;
+                    width: 242px;
+                    height: 26px;
+                    text: a.artista;
+                    font-size: 21px;
+                    color: Tema.texto-sec;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+
+                toque := TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    clicked => { root.abrir-album("recentes", i); }
+                }
+            }
+        }
+
+        // prateleiras: cada uma começa onde a anterior termina (altura 0 quando vazia)
+        s1 := Prateleira {
+            x: 32px;
+            y: root.recentes.length > 0 ? 376px : 112px;
+            width: 1096px;
+            titulo: "Mais tocados";
+            albuns: root.frequentes;
+            abrir(i) => { root.abrir-album("frequentes", i); }
+        }
+
+        s2 := Prateleira {
+            x: 32px;
+            y: s1.y + s1.height;
+            width: 1096px;
+            titulo: "Adicionados recentemente";
+            albuns: root.novidades;
+            abrir(i) => { root.abrir-album("novidades", i); }
+        }
+
+        s3 := Prateleira {
+            x: 32px;
+            y: s2.y + s2.height;
+            width: 1096px;
+            titulo: "Descubra";
+            albuns: root.aleatorios;
+            abrir(i) => { root.abrir-album("aleatorios", i); }
+        }
+    }
+
+    // mensagem no lugar do conteúdo (ex.: nenhuma música configurada)
+    Text {
+        x: 152px;
+        y: 240px;
+        width: 1096px;
+        height: 120px;
+        visible: root.mensagem != "";
+        text: root.mensagem;
+        font-size: 34px;
+        color: Tema.texto-sec;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        x: 550px;
+        y: 380px;
+        width: 300px;
+        height: 72px;
+        border-radius: 36px;
+        visible: root.mensagem != "";
+        background: bt.pressed ? Tema.destaque-suave : Tema.destaque;
+
+        Text {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            text: "Configurar";
+            font-size: 26px;
+            font-family: "DejaVu Sans Bold";
+            color: Tema.sobre-destaque;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        bt := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.navegar("ajustes"); }
+        }
+    }
+
+    // embutir glifos (não aparece na tela): caracteres dos textos dinâmicos, nos tamanhos usados
+    Text {
+        visible: false;
+        text: "áàâãéêíóôõúçÁÉÍÓÚÇñü abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ()[]-–—:'’&.,!?/";
+        font-size: 24px;
+    }
+    Text {
+        visible: false;
+        text: "áàâãéêíóôõúçÁÉÍÓÚÇñü abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ()[]-–—:'’&.,!?/";
+        font-size: 24px;
+        font-family: "DejaVu Sans Bold";
+    }
+    Text {
+        visible: false;
+        text: "áàâãéêíóôõúçÁÉÍÓÚÇñü abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ()[]-–—:'’&.,!?/";
+        font-size: 21px;
+    }
+    Text {
+        visible: false;
+        text: "áàâãéêíóôõúçÁÉÍÓÚÇñü abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ()[]-–—:'’&.,!?/";
+        font-size: 26px;
+        font-family: "DejaVu Sans Bold";
+    }
+    Text {
+        visible: false;
+        text: "áàâãéêíóôõúçÁÉÍÓÚÇñü abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 ()[]-–—:'’&.,!?/";
+        font-size: 44px;
+        font-family: "DejaVu Sans Bold";
     }
 }

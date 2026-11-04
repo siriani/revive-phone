@@ -2,8 +2,9 @@ import "fontes/DejaVuSans.ttf";
 import "fontes/DejaVuSansBold-Familia.ttf";
 import { Tema } from "tema.slint";
 export { Tema }
-export { FilaItem } from "musica_ui.slint";
+export { FilaItem, Album } from "musica_ui.slint";
 export { HoraClima, MoedaMini } from "painel_ui.slint";
+export { HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 export { AppOrdem } from "inicio_ui.slint";
 
 // ícones do clima por nome (o Rust escolhe o nome; as imagens vêm embutidas)
@@ -22,8 +23,9 @@ export global IconesClima {
 }
 import { Esquemas } from "esquemas.slint";
 import { MenuInner } from "../material/ui/components/menu.slint";
-import { TelaTocandoMat, TelaFila, RailMusica, FilaItem } from "musica_ui.slint";
+import { TelaTocandoMat, TelaFila, RailMusica, FilaItem, Album, MusicaInicioMat, MiniPlayer } from "musica_ui.slint";
 import { PainelMat, HoraClima, MoedaMini } from "painel_ui.slint";
+import { TelaClima, TelaCidade, HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 import { TelaOrganizar, BotaoEditarInicio, AppOrdem } from "inicio_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
@@ -454,99 +456,7 @@ component TelaTocando inherits Rectangle {
 
 // --------------------------------------------- música no estilo Spotify
 
-export struct Album { id: string, nome: string, artista: string, capa: image }
 export struct Faixa { titulo: string, sub: string }
-
-// "Tocando agora" fixo embaixo das telas de música
-component BarraTocando inherits Rectangle {
-    in property <bool> ativo;
-    in property <string> titulo;
-    in property <string> artista;
-    in property <image> capa;
-    in property <bool> pausa;
-    callback controle(string);
-    callback abrir();
-    x: 0; y: 640px; width: 1280px; height: 80px;
-    background: Tema.superficie;
-    if !root.ativo: Text { x: 30px; height: 80px; vertical-alignment: center; text: "nada tocando";
-                           font-size: 26px; color: Cores.apagado; }
-    if root.ativo: Rectangle {
-        x: 0; y: 0; width: 900px; height: 80px;
-        Rectangle { x: 10px; y: 8px; width: 64px; height: 64px; border-radius: 8px; background: Cores.cartao;
-                    Image { width: 64px; height: 64px; source: root.capa; image-fit: cover; } }
-        Text { x: 90px; y: 8px; width: 800px; text: root.titulo; font-size: 26px; font-family: "DejaVu Sans Bold";
-               color: Cores.texto; overflow: elide; }
-        Text { x: 90px; y: 42px; width: 800px; text: root.artista; font-size: 26px; color: Cores.apagado;
-               overflow: elide; }
-        TouchArea { clicked => { root.abrir(); } }
-    }
-    if root.ativo: Botao { x: 940px; y: 8px; width: 100px; height: 64px; texto: "◀◀"; fonte: 26px;
-                           clicado => { root.controle("anterior"); } }
-    if root.ativo: Botao { x: 1055px; y: 8px; width: 100px; height: 64px; texto: root.pausa ? "▶" : "❚❚";
-                           cor: Tema.destaque; clicado => { root.controle("pausar"); } }
-    if root.ativo: Botao { x: 1170px; y: 8px; width: 100px; height: 64px; texto: "▶▶"; fonte: 26px;
-                           clicado => { root.controle("proxima"); } }
-}
-
-// uma fileira de capas que rola para os lados
-component FileiraAlbuns inherits Rectangle {
-    in property <string> titulo;
-    in property <[Album]> albuns;
-    callback abrir(int);
-    height: 300px;
-    Text { x: 0; y: 0; text: root.titulo; font-size: 34px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
-    Flickable {
-        x: 0; y: 48px; width: parent.width; height: 252px;
-        content-width: max(parent.width, root.albuns.length * 190px);
-        for a[i] in root.albuns: Rectangle {
-            x: i * 190px; width: 175px; height: 250px;
-            Rectangle { x: 0; y: 0; width: 175px; height: 175px; border-radius: 10px; background: Cores.cartao;
-                        Text { text: "♫"; font-size: 44px; color: Cores.apagado; }
-                        Image { width: 175px; height: 175px; source: a.capa; image-fit: cover; } }
-            if toque.pressed: Rectangle { x: 0; y: 0; width: 175px; height: 175px; border-radius: 10px;
-                                          background: Tema.toque; }
-            Text { y: 182px; width: 175px; text: a.nome; font-size: 26px; color: Cores.texto; overflow: elide; }
-            Text { y: 214px; width: 175px; text: a.artista; font-size: 26px; color: Cores.apagado; overflow: elide; }
-            toque := TouchArea { clicked => { root.abrir(i); } }
-        }
-    }
-}
-
-component MusicaInicio inherits Rectangle {
-    in property <[Album]> recentes;
-    in property <[Album]> frequentes;
-    in property <[Album]> novidades;
-    in property <[Album]> aleatorios;
-    in property <string> mensagem;
-    callback abrir-album(string, int);
-    callback navegar(string);
-    // barra lateral (x/y explícitos: no Slint, sem eles o elemento fica centralizado no pai)
-    Rectangle {
-        x: 0; y: 0; width: 210px; height: 640px; background: Tema.superficie-baixa;
-        property <[{t: string, k: string}]> itens: [
-            {t: "Início", k: "home"}, {t: "Buscar", k: "buscar"}, {t: "Artistas", k: "artistas"},
-            {t: "Playlists", k: "playlists"}, {t: "Aleatórias", k: "aleatorias"}, {t: "♥ Favoritas", k: "favoritas"},
-            {t: "Fila", k: "fila"}, {t: "⚙ Ajustes", k: "ajustes"},
-            {t: "◀ Revive", k: "revive"}
-        ];
-        for n[i] in self.itens: Botao { x: 12px; y: 6px + i * 70px; width: 186px; height: 62px; texto: n.t;
-                                        fonte: 26px; cor: Tema.superficie-baixa; clicado => { root.navegar(n.k); } }
-    }
-    if root.mensagem != "": Text { x: 210px; y: 280px; width: 1070px; text: root.mensagem; font-size: 34px;
-                                   color: Cores.apagado; horizontal-alignment: center; }
-    Flickable {
-        x: 230px; y: 0; width: 1050px; height: 640px;
-        content-height: 4 * 310px + 20px;
-        FileiraAlbuns { y: 20px; width: 1040px; titulo: "Tocados recentemente"; albuns: root.recentes;
-                        abrir(i) => { root.abrir-album("recentes", i); } }
-        FileiraAlbuns { y: 330px; width: 1040px; titulo: "Mais tocados"; albuns: root.frequentes;
-                        abrir(i) => { root.abrir-album("frequentes", i); } }
-        FileiraAlbuns { y: 640px; width: 1040px; titulo: "Novidades"; albuns: root.novidades;
-                        abrir(i) => { root.abrir-album("novidades", i); } }
-        FileiraAlbuns { y: 950px; width: 1040px; titulo: "Para descobrir"; albuns: root.aleatorios;
-                        abrir(i) => { root.abrir-album("aleatorios", i); } }
-    }
-}
 
 component MusicaAlbum inherits Rectangle {
     in property <image> capa;
@@ -973,7 +883,7 @@ export component AppWindow inherits Window {
     out property <string> caracteres-embutidos:
         "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
         + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●"
-        + "◷≋✱⚙☁✉★⌂";  // ícones dos apps (vêm do Rust, não estão em literais)
+        + "◷≋✱⚙☁✉★⌂☀☠";  // ícones dos apps (vêm do Rust, não estão em literais)
 
     in-out property <string> tela: "inicio";
     in property <[AppInfo]> apps;
@@ -986,6 +896,7 @@ export component AppWindow inherits Window {
     in property <[Album]> mus-novidades;
     in property <[Album]> mus-aleatorios;
     in property <string> mus-mensagem;
+    in property <string> mus-saudacao: "Olá";
     in property <image> album-capa;
     in property <string> album-titulo;
     in property <string> album-artista;
@@ -1103,6 +1014,30 @@ export component AppWindow inherits Window {
     in property <bool> pn-noite;
     in property <int> bt-qtd;
     callback acordar();
+    // app Clima
+    in property <string> cl-cidade;
+    in property <string> cl-temp;
+    in property <string> cl-sensacao;
+    in property <string> cl-desc;
+    in property <string> cl-icone;
+    in property <string> cl-umidade;
+    in property <string> cl-vento;
+    in property <string> cl-chuva;
+    in property <string> cl-uv;
+    in property <string> cl-nascer;
+    in property <string> cl-por;
+    in property <string> cl-erro;
+    in property <bool> cl-carregando;
+    in property <[HoraPrevUi]> cl-horas;
+    in property <[DiaUi]> cl-dias;
+    in property <int> cl-sem-min;
+    in property <int> cl-sem-max;
+    in property <string> cid-busca;
+    in property <[LugarUi]> cid-resultados;
+    in property <string> cid-mensagem;
+    callback cl-atualizar();
+    callback cid-digitar();
+    callback cid-escolher(int);
     // organizar início
     in property <[AppOrdem]> org-apps;
     callback org-alternar(int);
@@ -1153,6 +1088,24 @@ export component AppWindow inherits Window {
             tema(e) => { root.ajustes-tema(e); }
             paleta(i) => { root.ajustes-paleta(i); }
             organizar => { root.ir("organizar"); }
+        }
+        if root.tela == "clima": TelaClima {
+            width: 1280px; height: 720px;
+            cidade: root.cl-cidade; temp: root.cl-temp; sensacao: root.cl-sensacao; descricao: root.cl-desc;
+            icone: IconesClima.img(root.cl-icone); umidade: root.cl-umidade; vento: root.cl-vento;
+            chuva: root.cl-chuva; uv: root.cl-uv; nascer: root.cl-nascer; por: root.cl-por;
+            erro: root.cl-erro; carregando: root.cl-carregando; horas: root.cl-horas; dias: root.cl-dias;
+            semana-min: root.cl-sem-min; semana-max: root.cl-sem-max;
+            voltar => { root.ir("inicio"); }
+            trocar-cidade => { root.ir("clima-cidade"); }
+            atualizar => { root.cl-atualizar(); }
+        }
+        if root.tela == "clima-cidade": TelaCidade {
+            width: 1280px; height: 720px; busca: root.cid-busca; resultados: root.cid-resultados;
+            mensagem: root.cid-mensagem;
+            voltar => { root.ir("clima"); }
+            digitar => { root.cid-digitar(); }
+            escolher(i) => { root.cid-escolher(i); }
         }
         if root.tela == "organizar": TelaOrganizar {
             width: 1280px; height: 720px; apps: root.org-apps;
@@ -1230,10 +1183,11 @@ export component AppWindow inherits Window {
             procurar => { root.bt-procurar(); }
             voltar => { root.ir("inicio"); }
         }
-        if root.tela == "musica": MusicaInicio {
+        if root.tela == "musica": MusicaInicioMat {
             width: 1280px; height: 720px;
             recentes: root.mus-recentes; frequentes: root.mus-frequentes; novidades: root.mus-novidades;
             aleatorios: root.mus-aleatorios; mensagem: root.mus-mensagem;
+            saudacao: root.mus-saudacao; toc-ativo: root.toc-ativo;
             abrir-album(l, i) => { root.mus-abrir-album(l, i); }
             navegar(k) => { root.mus-navegar(k); }
         }
@@ -1244,9 +1198,11 @@ export component AppWindow inherits Window {
             aleatorio => { root.album-aleatorio(); }
             voltar => { root.ir("musica"); }
         }
-        if root.tela == "musica" || root.tela == "album": BarraTocando {
+        if root.tela == "musica" || root.tela == "album": MiniPlayer {
+            x: root.tela == "musica" ? 132px : 12px; y: 624px;
+            width: root.tela == "musica" ? 1136px : 1256px;
             ativo: root.toc-ativo; titulo: root.toc-titulo; artista: root.toc-artista; capa: root.toc-capa;
-            pausa: root.toc-pausa;
+            pausa: root.toc-pausa; progresso: root.toc-progresso;
             controle(c) => { root.controle(c); }
             abrir => { root.ir("tocando"); }
         }

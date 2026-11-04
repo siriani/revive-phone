@@ -1,0 +1,689 @@
+// Revive: telas de clima (Slint + Material 3). Paisagem 1280x720, renderizador por software.
+// TelaClima: tempo agora + detalhes à esquerda; previsão de 24 horas e 7 dias à direita.
+// TelaCidade: busca de cidade (o teclado do sistema é aberto por digitar()).
+// Tudo com x/y explícitos (sem layouts). Fontes só 18/21/24/26/33/34/36/110px.
+// Os textos dinâmicos usam os caracteres dos Texts invisíveis no fim de cada tela
+// (só caracteres literais no .slint entram na fonte embutida).
+
+import { IconButton } from "@material";
+import { Tema } from "tema.slint";
+
+export struct HoraPrevUi { hora: string, temp: string, icone: image, chuva: string }
+export struct DiaUi { nome: string, icone: image, max: int, min: int, chuva: string }
+export struct LugarUi { nome: string, detalhe: string }
+
+// Botão de ícone próprio (mesmo desenho do inicio_ui.slint), 72x72 com ícone tingido.
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    in property <bool> ativo: true;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : #00000000;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.ativo ? root.cor : root.cor.with-alpha(0.3);
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.ativo;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Cartão pequeno de detalhe: ícone 36px, rótulo 21px e valor 33px negrito.
+component CartaoClima inherits Rectangle {
+    in property <image> icone;
+    in property <string> rotulo;
+    in property <string> valor;
+
+    width: 236px;
+    height: 92px;
+    border-radius: Tema.raio-m;
+    background: Tema.superficie;
+    clip: true;
+
+    Image {
+        x: 18px;
+        y: 28px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: Tema.destaque;
+        image-fit: contain;
+    }
+    Text {
+        x: 66px;
+        y: 14px;
+        width: 160px;
+        height: 28px;
+        text: root.rotulo;
+        font-size: 21px;
+        color: Tema.texto-sec;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 66px;
+        y: 42px;
+        width: 160px;
+        height: 40px;
+        text: root.valor;
+        font-size: 33px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+}
+
+// ---------------------------------------------------------------- clima
+
+export component TelaClima inherits Rectangle {
+    in property <string> cidade;
+    in property <string> temp;
+    in property <string> sensacao;
+    in property <string> descricao;
+    in property <image> icone;
+    in property <string> umidade;
+    in property <string> vento;
+    in property <string> chuva;
+    in property <string> uv;
+    in property <string> nascer;
+    in property <string> por;
+    in property <string> erro;
+    in property <bool> carregando;
+    in property <[HoraPrevUi]> horas;
+    in property <[DiaUi]> dias;
+    in property <int> semana-min;
+    in property <int> semana-max;
+
+    callback voltar();
+    callback trocar-cidade();
+    callback atualizar();
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    // conteúdo (some quando há erro)
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 720px;
+        background: #00000000;
+        visible: root.erro == "";
+
+        // ------------------------------------------ coluna esquerda (x 24..520)
+        // bloco agora
+        Image {
+            x: 24px;
+            y: 116px;
+            width: 120px;
+            height: 120px;
+            source: root.icone;
+            colorize: Tema.destaque;
+            image-fit: contain;
+        }
+        Text {
+            x: 160px;
+            y: 104px;
+            width: 360px;
+            height: 140px;
+            text: root.temp;
+            font-size: 110px;
+            font-family: "DejaVu Sans Bold";
+            color: Tema.texto;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+        Text {
+            x: 24px;
+            y: 268px;
+            width: 496px;
+            height: 48px;
+            text: root.descricao;
+            font-size: 34px;
+            color: Tema.texto;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+        Text {
+            x: 24px;
+            y: 318px;
+            width: 496px;
+            height: 40px;
+            text: root.sensacao;
+            font-size: 26px;
+            color: Tema.texto-sec;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+
+        // grade 2x3 de detalhes
+        CartaoClima {
+            x: 24px;
+            y: 372px;
+            icone: @image-url("icones/humidity_percentage.svg");
+            rotulo: "Umidade";
+            valor: root.umidade;
+        }
+        CartaoClima {
+            x: 284px;
+            y: 372px;
+            icone: @image-url("icones/air.svg");
+            rotulo: "Vento";
+            valor: root.vento;
+        }
+        CartaoClima {
+            x: 24px;
+            y: 480px;
+            icone: @image-url("icones/water_drop.svg");
+            rotulo: "Chuva";
+            valor: root.chuva;
+        }
+        CartaoClima {
+            x: 284px;
+            y: 480px;
+            icone: @image-url("icones/wb_sunny.svg");
+            rotulo: "UV";
+            valor: root.uv;
+        }
+        CartaoClima {
+            x: 24px;
+            y: 588px;
+            icone: @image-url("icones/wb_twilight.svg");
+            rotulo: "Nascer";
+            valor: root.nascer;
+        }
+        CartaoClima {
+            x: 284px;
+            y: 588px;
+            icone: @image-url("icones/wb_twilight.svg");
+            rotulo: "Pôr do sol";
+            valor: root.por;
+        }
+
+        // ------------------------------------------ coluna direita (x 544..1256)
+        // cartão: próximas 24 horas (rolagem horizontal)
+        Rectangle {
+            x: 544px;
+            y: 108px;
+            width: 712px;
+            height: 200px;
+            border-radius: Tema.raio-g;
+            background: Tema.superficie;
+            clip: true;
+
+            Text {
+                x: 24px;
+                y: 12px;
+                width: 664px;
+                height: 36px;
+                text: "Próximas 24 horas";
+                font-size: 26px;
+                color: Tema.texto-sec;
+                vertical-alignment: center;
+            }
+            Flickable {
+                x: 0px;
+                y: 52px;
+                width: 712px;
+                height: 140px;
+                interactive: true;
+                content-width: max(712px, 24px + root.horas.length * 96px);
+                content-height: 140px;
+
+                for h[i] in root.horas : Rectangle {
+                    x: 24px + i * 96px;
+                    y: 0px;
+                    width: 96px;
+                    height: 140px;
+                    background: #00000000;
+                    Text {
+                        x: 0px;
+                        y: 0px;
+                        width: 96px;
+                        height: 26px;
+                        text: h.hora;
+                        font-size: 21px;
+                        color: Tema.texto-sec;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Image {
+                        x: 24px;
+                        y: 30px;
+                        width: 48px;
+                        height: 48px;
+                        source: h.icone;
+                        colorize: Tema.destaque;
+                        image-fit: contain;
+                    }
+                    Text {
+                        x: 0px;
+                        y: 84px;
+                        width: 96px;
+                        height: 30px;
+                        text: h.temp;
+                        font-size: 26px;
+                        font-family: "DejaVu Sans Bold";
+                        color: Tema.texto;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 0px;
+                        y: 116px;
+                        width: 96px;
+                        height: 22px;
+                        text: h.chuva;
+                        font-size: 18px;
+                        color: h.chuva == "0%" || h.chuva == "" ? Tema.texto-sec : Tema.destaque;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // cartão: próximos 7 dias (barra de amplitude pela semana)
+        Rectangle {
+            x: 544px;
+            y: 320px;
+            width: 712px;
+            height: 392px;
+            border-radius: Tema.raio-g;
+            background: Tema.superficie;
+            clip: true;
+
+            Text {
+                x: 24px;
+                y: 12px;
+                width: 664px;
+                height: 34px;
+                text: "Próximos 7 dias";
+                font-size: 26px;
+                color: Tema.texto-sec;
+                vertical-alignment: center;
+            }
+            for d[i] in root.dias : Rectangle {
+                x: 0px;
+                y: 52px + i * 48px;
+                width: 712px;
+                height: 48px;
+                background: #00000000;
+                Text {
+                    x: 24px;
+                    y: 7px;
+                    width: 120px;
+                    height: 34px;
+                    text: d.nome;
+                    font-size: 26px;
+                    color: Tema.texto;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+                Image {
+                    x: 150px;
+                    y: 4px;
+                    width: 40px;
+                    height: 40px;
+                    source: d.icone;
+                    colorize: Tema.destaque;
+                    image-fit: contain;
+                }
+                Text {
+                    x: 200px;
+                    y: 10px;
+                    width: 72px;
+                    height: 28px;
+                    text: d.chuva;
+                    font-size: 21px;
+                    color: d.chuva == "0%" || d.chuva == "" ? Tema.texto-sec : Tema.destaque;
+                    overflow: elide;
+                    wrap: no-wrap;
+                    vertical-alignment: center;
+                }
+                Text {
+                    x: 276px;
+                    y: 7px;
+                    width: 60px;
+                    height: 34px;
+                    text: "\{d.min}°";
+                    font-size: 26px;
+                    color: Tema.texto-sec;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                // trilho da amplitude; o segmento vai do mínimo ao máximo da semana
+                Rectangle {
+                    x: 344px;
+                    y: 22px;
+                    width: 220px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Tema.contorno;
+                    clip: true;
+                    Rectangle {
+                        x: parent.width * max(0.0, min(1.0, (d.min - root.semana-min) * 1.0 / max(1, root.semana-max - root.semana-min)));
+                        y: 0px;
+                        width: parent.width * max(0.0, min(1.0, (d.max - d.min) * 1.0 / max(1, root.semana-max - root.semana-min)));
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Tema.destaque;
+                    }
+                }
+                Text {
+                    x: 592px;
+                    y: 7px;
+                    width: 96px;
+                    height: 34px;
+                    text: "\{d.max}°";
+                    font-size: 26px;
+                    font-family: "DejaVu Sans Bold";
+                    color: Tema.texto;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    x: 24px;
+                    y: 47px;
+                    width: 664px;
+                    height: 1px;
+                    background: Tema.contorno;
+                    visible: i < root.dias.length - 1;
+                }
+            }
+        }
+    }
+
+    // erro: mensagem centralizada e botão para escolher outra cidade
+    Text {
+        x: 240px;
+        y: 220px;
+        width: 800px;
+        height: 140px;
+        text: root.erro;
+        font-size: 34px;
+        color: Tema.texto;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        visible: root.erro != "";
+    }
+    Rectangle {
+        x: 490px;
+        y: 400px;
+        width: 300px;
+        height: 72px;
+        border-radius: 36px;
+        background: Tema.destaque;
+        clip: true;
+        visible: root.erro != "";
+
+        Text {
+            x: 0px;
+            y: 0px;
+            width: 300px;
+            height: 72px;
+            text: "Escolher cidade";
+            font-size: 26px;
+            color: Tema.sobre-destaque;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.trocar-cidade(); }
+        }
+    }
+
+    // barra superior (y 0, altura 96)
+    IconButton {
+        x: 12px;
+        y: 8px;
+        icon: @image-url("icones/arrow_back.svg");
+        clicked => { root.voltar(); }
+    }
+    Image {
+        x: 84px;
+        y: 30px;
+        width: 36px;
+        height: 36px;
+        source: @image-url("icones/location_on.svg");
+        colorize: Tema.destaque;
+        image-fit: contain;
+    }
+    Text {
+        x: 128px;
+        y: 24px;
+        width: 700px;
+        height: 48px;
+        text: root.cidade;
+        font-size: 36px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+    Text {
+        x: 840px;
+        y: 30px;
+        width: 300px;
+        height: 40px;
+        text: "Atualizando...";
+        font-size: 21px;
+        color: Tema.texto-sec;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        visible: root.carregando;
+    }
+    BotaoIcone {
+        x: 1176px;
+        y: 12px;
+        icone: @image-url("icones/search.svg");
+        cor: Tema.texto;
+        clicado => { root.trocar-cidade(); }
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos: a fonte só leva os glifos que aparecem em textos literais.
+    // Estes Texts invisíveis cobrem os textos dinâmicos, em cada tamanho e família usados.
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 110px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 36px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 34px; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 33px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 26px; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 26px; font-family: "DejaVu Sans Bold"; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 21px; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 18px; }
+}
+
+// ---------------------------------------------------------------- escolher cidade
+
+export component TelaCidade inherits Rectangle {
+    in property <string> busca;
+    in property <[LugarUi]> resultados;
+    in property <string> mensagem;
+
+    callback voltar();
+    callback digitar();
+    callback escolher(int);
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    // barra superior (y 0, altura 96)
+    IconButton {
+        x: 12px;
+        y: 8px;
+        icon: @image-url("icones/arrow_back.svg");
+        clicked => { root.voltar(); }
+    }
+    Text {
+        x: 84px;
+        y: 24px;
+        width: 1100px;
+        height: 48px;
+        text: "Escolher cidade";
+        font-size: 36px;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        vertical-alignment: center;
+    }
+
+    // campo de busca: toque abre o teclado do sistema
+    Rectangle {
+        x: 32px;
+        y: 120px;
+        width: 1216px;
+        height: 88px;
+        border-radius: Tema.raio-g;
+        background: Tema.superficie;
+        border-width: 2px;
+        border-color: Tema.contorno;
+        clip: true;
+
+        Image {
+            x: 24px;
+            y: 24px;
+            width: 40px;
+            height: 40px;
+            source: @image-url("icones/search.svg");
+            colorize: Tema.texto-sec;
+            image-fit: contain;
+        }
+        Text {
+            x: 84px;
+            y: 20px;
+            width: 1100px;
+            height: 48px;
+            text: root.busca != "" ? root.busca : "Toque para digitar o nome da cidade";
+            font-size: 34px;
+            color: root.busca != "" ? Tema.texto : Tema.texto-sec;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.digitar(); }
+        }
+    }
+
+    // resultados (somem enquanto há mensagem)
+    Flickable {
+        x: 0px;
+        y: 232px;
+        width: 1280px;
+        height: 488px;
+        visible: root.mensagem == "";
+        content-height: root.resultados.length * 88px;
+
+        for lugar[i] in root.resultados : Rectangle {
+            x: 32px;
+            y: i * 88px;
+            width: 1216px;
+            height: 88px;
+            background: #00000000;
+
+            Image {
+                x: 0px;
+                y: 24px;
+                width: 40px;
+                height: 40px;
+                source: @image-url("icones/location_on.svg");
+                colorize: Tema.destaque;
+                image-fit: contain;
+            }
+            Text {
+                x: 64px;
+                y: 10px;
+                width: 1100px;
+                height: 44px;
+                text: lugar.nome;
+                font-size: 34px;
+                color: Tema.texto;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+            Text {
+                x: 64px;
+                y: 52px;
+                width: 1100px;
+                height: 30px;
+                text: lugar.detalhe;
+                font-size: 24px;
+                color: Tema.texto-sec;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                x: 0px;
+                y: 87px;
+                width: 1216px;
+                height: 1px;
+                background: Tema.contorno;
+                visible: i < root.resultados.length - 1;
+            }
+            TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.escolher(i); }
+            }
+        }
+    }
+
+    // mensagem centralizada (ex.: busca sem resultados)
+    Text {
+        x: 32px;
+        y: 232px;
+        width: 1216px;
+        height: 488px;
+        text: root.mensagem;
+        font-size: 34px;
+        color: Tema.texto-sec;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        visible: root.mensagem != "";
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos para os textos dinâmicos (busca, nomes, detalhes e mensagens).
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 34px; }
+    Text { visible: false; text: "0123456789°%:/,.-−+h km/hABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!?()'"; font-size: 24px; }
+}

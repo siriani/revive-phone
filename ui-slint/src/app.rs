@@ -14,7 +14,7 @@ use crate::{clima, inicio, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppOrdem, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppOrdem, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -31,6 +31,7 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("musica", "Música", "♫", (40, 60, 90)),
     ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
+    ("clima", "Clima", "☀", (176, 120, 20)),
     ("ajustes", "Ajustes", "⚙", (70, 74, 84)),
 ];
 
@@ -70,6 +71,8 @@ enum Modo {
     Campo(String),
     /// Telegram: "telefone", "codigo", "senha" ou "mensagem"
     Tg(String),
+    /// nome da cidade do app Clima
+    Cidade,
 }
 
 struct Estado {
@@ -392,6 +395,7 @@ fn atualizar_teclado(ui: &AppWindow) {
             Modo::Busca => "Buscar",
             Modo::Campo(_) => "OK",
             Modo::Tg(_) => "Enviar",
+            Modo::Cidade => "Buscar",
         };
         let mostrado = if senha && e.ocultar { "•".repeat(e.texto.chars().count()) } else { e.texto.clone() };
         let ini = mostrado.chars().count().saturating_sub(30);
@@ -399,6 +403,7 @@ fn atualizar_teclado(ui: &AppWindow) {
         ui.set_teclado_vazio(ss(match &e.modo {
             Modo::Senha(s) => format!("senha de {}", curto(s, 18)),
             Modo::Busca => "buscar música".into(),
+            Modo::Cidade => "nome da cidade".into(),
             Modo::Campo(c) => format!("{c} do Navidrome"),
             Modo::Tg(c) => match c.as_str() {
                 "telefone" => "telefone com DDI, ex.: +5511999999999".into(),
@@ -433,12 +438,14 @@ fn confirmar(ui: &AppWindow) {
             Modo::Busca => Modo::Busca,
             Modo::Campo(c) => Modo::Campo(c.clone()),
             Modo::Tg(c) => Modo::Tg(c.clone()),
+            Modo::Cidade => Modo::Cidade,
         };
         (m, e.texto.clone())
     });
     match modo {
         Modo::Senha(ssid) => conectar_wifi(ui, ssid, texto),
         Modo::Busca => buscar(ui, texto.trim().to_string()),
+        Modo::Cidade => buscar_cidade(ui, texto.trim().to_string()),
         Modo::Tg(c) => {
             let v = texto.trim().to_string();
             if v.is_empty() {
@@ -480,7 +487,9 @@ fn cancelar_teclado(ui: &AppWindow) {
         Modo::Campo(_) => 2,
         Modo::Tg(c) if c == "mensagem" => 3,
         Modo::Tg(_) => 4,
+        Modo::Cidade => 5,
     }) {
+        5 => ui.set_tela(ss("clima-cidade")),
         0 => ir(ui, "wifi"),
         1 => ui.set_tela(ss("musica")),
         3 => ui.set_tela(ss("tg-chat")),
@@ -553,6 +562,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     if tela == "telegram" {
         return abrir_telegram(ui);
     }
+    if tela == "clima" {
+        return abrir_clima(ui);
+    }
     if tela == "fila" {
         carregar_fila(ui);
     }
@@ -600,6 +612,12 @@ fn mostrar_fileira(ui: &AppWindow, fila: &str, m: Rc<VecModel<Album>>) {
 
 /// Início da música: 4 fileiras de álbuns; as capas chegam uma a uma (cache em disco).
 fn carregar_musica(ui: &AppWindow) {
+    let h = chrono::Local::now().format("%H").to_string().parse::<u32>().unwrap_or(12);
+    ui.set_mus_saudacao(ss(match h {
+        5..=11 => "Bom dia",
+        12..=17 => "Boa tarde",
+        _ => "Boa noite",
+    }));
     if !api().configurado() {
         ui.set_mus_mensagem(ss("Configure o Navidrome em ⚙ Ajustes"));
         return;
@@ -1337,6 +1355,89 @@ fn aplicar_ordem(ui: &AppWindow) {
     ui.set_org_apps(ModelRc::new(VecModel::from(org)));
 }
 
+thread_local! {
+    static LUGARES: RefCell<Vec<clima::Lugar>> = RefCell::default();
+}
+
+/// App Clima: mostra a tela e busca a previsão completa em segundo plano.
+fn abrir_clima(ui: &AppWindow) {
+    ui.set_tela(ss("clima"));
+    ui.set_cl_carregando(true);
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let r = clima::previsao();
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            ui.set_cl_carregando(false);
+            let p = match r {
+                Ok(p) => p,
+                Err(e) => return ui.set_cl_erro(ss(e)),
+            };
+            ui.set_cl_erro(ss(""));
+            ui.set_cl_cidade(ss(p.cidade));
+            ui.set_cl_temp(ss(format!("{}°", p.temp)));
+            ui.set_cl_sensacao(ss(format!("Sensação {}°", p.sensacao)));
+            ui.set_cl_desc(ss(p.descricao));
+            ui.set_cl_icone(ss(p.icone));
+            ui.set_cl_umidade(ss(format!("{}%", p.umidade)));
+            ui.set_cl_vento(ss(format!("{} km/h", p.vento)));
+            ui.set_cl_chuva(ss(format!("{}%", p.chuva_hoje)));
+            ui.set_cl_uv(ss(p.uv.to_string()));
+            ui.set_cl_nascer(ss(p.nascer));
+            ui.set_cl_por(ss(p.por));
+            let g = ui.global::<IconesClima>();
+            let horas: Vec<HoraPrevUi> = p
+                .horas
+                .iter()
+                .map(|h| HoraPrevUi {
+                    hora: ss(h.hora.clone()),
+                    temp: ss(format!("{}°", h.temp)),
+                    icone: g.invoke_img(ss(h.icone)),
+                    chuva: ss(format!("{}%", h.chuva)),
+                })
+                .collect();
+            ui.set_cl_horas(ModelRc::new(VecModel::from(horas)));
+            ui.set_cl_sem_min(p.dias.iter().map(|d| d.min).min().unwrap_or(0));
+            ui.set_cl_sem_max(p.dias.iter().map(|d| d.max).max().unwrap_or(1));
+            let dias: Vec<DiaUi> = p
+                .dias
+                .iter()
+                .map(|d| DiaUi {
+                    nome: ss(d.nome.clone()),
+                    icone: g.invoke_img(ss(d.icone)),
+                    max: d.max,
+                    min: d.min,
+                    chuva: ss(format!("{}%", d.chuva)),
+                })
+                .collect();
+            ui.set_cl_dias(ModelRc::new(VecModel::from(dias)));
+        });
+    });
+}
+
+/// Busca de cidade (geocodificação do Open-Meteo) para o app Clima.
+fn buscar_cidade(ui: &AppWindow, nome: String) {
+    ui.set_tela(ss("clima-cidade"));
+    ui.set_cid_busca(ss(nome.clone()));
+    if nome.is_empty() {
+        return;
+    }
+    ui.set_cid_mensagem(ss("buscando..."));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let r = clima::buscar_cidade(&nome);
+        let _ = fraca.upgrade_in_event_loop(move |ui| match r {
+            Ok(l) => {
+                ui.set_cid_mensagem(ss(if l.is_empty() { "nenhuma cidade encontrada" } else { "" }));
+                let v: Vec<LugarUi> =
+                    l.iter().map(|x| LugarUi { nome: ss(x.nome.clone()), detalhe: ss(x.detalhe.clone()) }).collect();
+                ui.set_cid_resultados(ModelRc::new(VecModel::from(v)));
+                LUGARES.with_borrow_mut(|g| *g = l);
+            }
+            Err(e) => ui.set_cid_mensagem(ss(format!("erro: {}", curto(&e, 50)))),
+        });
+    });
+}
+
 /// Preço curto para o cartão do Painel: "98,4 mil", "3.120", "0,52".
 fn compacto(p: f64) -> String {
     if p >= 10_000.0 {
@@ -1451,6 +1552,20 @@ pub fn ligar(ui: &AppWindow) {
         f.upgrade().iter().for_each(aplicar_ordem);
     });
     ligar_painel(ui);
+    let f = ui.as_weak();
+    ui.on_cl_atualizar(move || f.upgrade().iter().for_each(abrir_clima));
+    let f = ui.as_weak();
+    ui.on_cid_digitar(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Cidade)));
+    let f = ui.as_weak();
+    ui.on_cid_escolher(move |i| {
+        let Some(ui) = f.upgrade() else { return };
+        if let Some(l) = LUGARES.with_borrow(|g| g.get(i.max(0) as usize).cloned()) {
+            match clima::salvar_local(&l) {
+                Ok(()) => abrir_clima(&ui),
+                Err(e) => ui.set_cid_mensagem(ss(format!("não consegui salvar: {}", curto(&e, 40)))),
+            }
+        }
+    });
     let f = ui.as_weak();
     ui.on_cripto_abrir(move |id, nome| {
         if let Some(ui) = f.upgrade() {

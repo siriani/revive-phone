@@ -178,3 +178,302 @@ fn icone(codigo: i64, dia: bool) -> &'static str {
         _ => "cloud",
     }
 }
+
+// ---------------------------------------------------------------------------
+// Previsão completa (7 dias + 24 horas), busca de cidade e troca de local.
+// ---------------------------------------------------------------------------
+
+const CACHE_COMPLETO: &str = "/var/cache/revive/clima-completo.json";
+
+#[derive(Clone)]
+pub struct Previsao {
+    pub cidade: String,
+    pub temp: i32,
+    pub sensacao: i32,
+    pub umidade: i32,
+    pub vento: i32, // km/h
+    pub descricao: String,
+    pub icone: &'static str,
+    pub chuva_hoje: i32, // %
+    pub uv: i32,
+    pub nascer: String, // "06:12"
+    pub por: String,
+    pub horas: Vec<HoraPrev>,
+    pub dias: Vec<Dia>,
+}
+
+#[derive(Clone)]
+pub struct HoraPrev {
+    pub hora: String, // "14h" ou "Agora" na primeira
+    pub temp: i32,
+    pub icone: &'static str,
+    pub chuva: i32,
+}
+
+#[derive(Clone)]
+pub struct Dia {
+    pub nome: String, // "Hoje", "Amanhã", "Qua"...
+    pub icone: &'static str,
+    pub max: i32,
+    pub min: i32,
+    pub chuva: i32,
+}
+
+#[derive(Clone)]
+pub struct Lugar {
+    pub nome: String,
+    pub detalhe: String, // "São Paulo, Brasil"
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// GET simples com o User-Agent do painel.
+fn baixar(url: &str) -> Result<String, String> {
+    let bytes = agente()
+        .get(url)
+        .header("User-Agent", "revive")
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(bytes).map_err(|e| e.to_string())
+}
+
+/// Grava um cache qualquer criando a pasta.
+fn gravar_em(caminho: &str, texto: &str) {
+    let _ = std::fs::create_dir_all("/var/cache/revive");
+    let _ = std::fs::write(caminho, texto);
+}
+
+/// O arquivo de cache foi gravado há menos de 30 min?
+fn fresco(caminho: &str) -> bool {
+    std::fs::metadata(caminho)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .is_some_and(|idade| idade < VALIDADE)
+}
+
+fn buscar_completo(lat: &str, lon: &str) -> Result<String, String> {
+    let url = format!(
+        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}\
+         &current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day\
+         &hourly=temperature_2m,weather_code,is_day,precipitation_probability\
+         &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset\
+         &timezone=auto&forecast_days=7"
+    );
+    baixar(&url)
+}
+
+/// Temperatura, sensação, 24 horas e 7 dias; mesmo cache de 30 min do resumo.
+pub fn previsao() -> Result<Previsao, String> {
+    let (lat, lon, cidade) = ler_conf().ok_or("configure /etc/revive/painel.conf (lat, lon, cidade)")?;
+    if fresco(CACHE_COMPLETO) {
+        if let Ok(texto) = std::fs::read_to_string(CACHE_COMPLETO) {
+            if let Ok(p) = montar_previsao(&cidade, &texto) {
+                return Ok(p);
+            }
+        }
+    }
+    match buscar_completo(&lat, &lon) {
+        Ok(texto) => {
+            gravar_em(CACHE_COMPLETO, &texto);
+            montar_previsao(&cidade, &texto)
+        }
+        // sem rede: o cache velho ainda serve
+        Err(e) => match std::fs::read_to_string(CACHE_COMPLETO) {
+            Ok(texto) => montar_previsao(&cidade, &texto),
+            Err(_) => Err(e),
+        },
+    }
+}
+
+/// Índice da primeira hora cheia igual ou depois da hora atual.
+fn inicio_horas(horas: &[Value], agora: &str) -> usize {
+    let Some(chave) = agora.get(0..13) else { return 0 };
+    horas
+        .iter()
+        .position(|t| t.as_str().and_then(|t| t.get(0..13)).is_some_and(|h| h >= chave))
+        .unwrap_or(0)
+}
+
+/// "2026-11-03T06:12" -> "06:12".
+fn hora_curta(iso: &str) -> String {
+    iso.get(11..16).unwrap_or("").to_string()
+}
+
+/// Abreviação pt-BR do dia da semana; "" se a data for inválida.
+fn dia_semana(data: &str) -> &'static str {
+    use chrono::Datelike;
+    let Ok(d) = chrono::NaiveDate::parse_from_str(data, "%Y-%m-%d") else {
+        return "";
+    };
+    match d.weekday().num_days_from_monday() {
+        0 => "Seg",
+        1 => "Ter",
+        2 => "Qua",
+        3 => "Qui",
+        4 => "Sex",
+        5 => "Sáb",
+        _ => "Dom",
+    }
+}
+
+fn nome_dia(i: usize, data: &str) -> String {
+    match i {
+        0 => "Hoje".to_string(),
+        1 => "Amanhã".to_string(),
+        _ => dia_semana(data).to_string(),
+    }
+}
+
+fn montar_previsao(cidade: &str, texto: &str) -> Result<Previsao, String> {
+    let v: Value = serde_json::from_str(texto).map_err(|e| e.to_string())?;
+    let atual = &v["current"];
+    let agora = atual["time"].as_str().ok_or("resposta inesperada")?;
+    let codigo = atual["weather_code"].as_i64().unwrap_or(0);
+    let dia = atual["is_day"].as_i64().unwrap_or(1) != 0;
+    let horaria = &v["hourly"];
+    let diaria = &v["daily"];
+
+    // 24 horas a partir da hora atual; a primeira é "Agora"
+    let horas_iso = horaria["time"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let inicio = inicio_horas(horas_iso, agora);
+    let mut horas = Vec::new();
+    for i in inicio..horas_iso.len().min(inicio + 24) {
+        let Some(iso) = horas_iso[i].as_str() else { continue };
+        let primeira = horas.is_empty();
+        let hh = iso.get(11..13).unwrap_or("");
+        let claro = horaria["is_day"].get(i).and_then(Value::as_f64).unwrap_or(1.0) != 0.0;
+        horas.push(HoraPrev {
+            hora: if primeira { "Agora".to_string() } else { format!("{hh}h") },
+            temp: numero(&horaria["temperature_2m"], i).round() as i32,
+            icone: icone(numero(&horaria["weather_code"], i) as i64, claro),
+            chuva: numero(&horaria["precipitation_probability"], i).round() as i32,
+        });
+    }
+
+    // 7 dias; o ícone é sempre a versão de dia
+    let dias_iso = diaria["time"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let mut dias = Vec::new();
+    for i in 0..dias_iso.len().min(7) {
+        let data = dias_iso[i].as_str().unwrap_or("");
+        dias.push(Dia {
+            nome: nome_dia(i, data),
+            icone: icone(numero(&diaria["weather_code"], i) as i64, true),
+            max: numero(&diaria["temperature_2m_max"], i).round() as i32,
+            min: numero(&diaria["temperature_2m_min"], i).round() as i32,
+            chuva: numero(&diaria["precipitation_probability_max"], i).round() as i32,
+        });
+    }
+
+    Ok(Previsao {
+        cidade: cidade.to_string(),
+        temp: atual["temperature_2m"].as_f64().unwrap_or(0.0).round() as i32,
+        sensacao: atual["apparent_temperature"].as_f64().unwrap_or(0.0).round() as i32,
+        umidade: atual["relative_humidity_2m"].as_f64().unwrap_or(0.0).round() as i32,
+        vento: atual["wind_speed_10m"].as_f64().unwrap_or(0.0).round() as i32,
+        descricao: descricao(codigo).to_string(),
+        icone: icone(codigo, dia),
+        chuva_hoje: numero(&diaria["precipitation_probability_max"], 0).round() as i32,
+        uv: numero(&diaria["uv_index_max"], 0).round() as i32,
+        nascer: hora_curta(diaria["sunrise"].get(0).and_then(Value::as_str).unwrap_or("")),
+        por: hora_curta(diaria["sunset"].get(0).and_then(Value::as_str).unwrap_or("")),
+        horas,
+        dias,
+    })
+}
+
+/// Percent-encoding manual: mantém [A-Za-z0-9-_.~] e escapa os bytes UTF-8.
+fn pct(texto: &str) -> String {
+    let mut saida = String::with_capacity(texto.len());
+    for b in texto.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                saida.push(b as char)
+            }
+            _ => saida.push_str(&format!("%{b:02X}")),
+        }
+    }
+    saida
+}
+
+/// Busca cidades no geocoding do Open-Meteo; lista vazia se nada casar.
+pub fn buscar_cidade(nome: &str) -> Result<Vec<Lugar>, String> {
+    let url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=8&language=pt&format=json",
+        pct(nome.trim())
+    );
+    let texto = baixar(&url)?;
+    let v: Value = serde_json::from_str(&texto).map_err(|e| e.to_string())?;
+    let Some(resultados) = v["results"].as_array() else {
+        return Ok(Vec::new());
+    };
+    Ok(resultados
+        .iter()
+        .filter_map(|r| {
+            let nome = r["name"].as_str()?.to_string();
+            let detalhe = [r["admin1"].as_str(), r["country"].as_str()]
+                .into_iter()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(Lugar {
+                nome,
+                detalhe,
+                lat: r["latitude"].as_f64().unwrap_or(0.0),
+                lon: r["longitude"].as_f64().unwrap_or(0.0),
+            })
+        })
+        .collect())
+}
+
+/// Grava lat/lon/cidade no painel e invalida os caches.
+pub fn salvar_local(l: &Lugar) -> Result<(), String> {
+    let atual = std::fs::read_to_string(CONF).unwrap_or_default();
+    let mut saida = String::new();
+    for linha in atual.lines() {
+        let chave = linha.split_once('=').map(|(k, _)| k.trim()).unwrap_or("");
+        if matches!(chave, "lat" | "lon" | "cidade") {
+            continue;
+        }
+        saida.push_str(linha);
+        saida.push('\n');
+    }
+    saida.push_str(&format!("lat={}\nlon={}\ncidade={}\n", l.lat, l.lon, l.nome));
+
+    std::fs::create_dir_all("/etc/revive").map_err(|e| e.to_string())?;
+    std::fs::write(CONF, saida).map_err(|e| e.to_string())?;
+    // força nova busca no próximo acesso
+    let _ = std::fs::remove_file(CACHE);
+    let _ = std::fs::remove_file(CACHE_COMPLETO);
+    Ok(())
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn percent_encoding() {
+        assert_eq!(pct("São Paulo"), "S%C3%A3o%20Paulo");
+        assert_eq!(pct("Rio de Janeiro"), "Rio%20de%20Janeiro");
+        assert_eq!(pct("a-b_c.d~e"), "a-b_c.d~e");
+        assert_eq!(pct("ç"), "%C3%A7");
+        assert_eq!(pct(""), "");
+    }
+
+    #[test]
+    fn nome_dia_semana() {
+        assert_eq!(dia_semana("2026-11-03"), "Ter");
+        assert_eq!(dia_semana("2026-11-02"), "Seg");
+        assert_eq!(dia_semana("2026-11-07"), "Sáb");
+        assert_eq!(dia_semana("2026-11-08"), "Dom");
+        assert_eq!(dia_semana("lixo"), "");
+        assert_eq!(nome_dia(0, "2026-11-03"), "Hoje");
+        assert_eq!(nome_dia(1, "2026-11-04"), "Amanhã");
+        assert_eq!(nome_dia(2, "2026-11-05"), "Qui");
+    }
+}
