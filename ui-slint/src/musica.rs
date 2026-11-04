@@ -223,6 +223,59 @@ impl Subsonic {
         let _ = self.get("scrobble", &[("id", id), ("submission", if terminou { "true" } else { "false" })]);
     }
 
+    /// Marca (star) ou desmarca (unstar) a faixa e atualiza a fila local.
+    pub fn favoritar(&self, id: &str, sim: bool) -> Result<(), String> {
+        self.get(if sim { "star" } else { "unstar" }, &[("id", id)])?;
+        if let Ok(txt) = std::fs::read_to_string(FILA) {
+            if let Ok(mut fila) = serde_json::from_str::<Value>(&txt) {
+                if let Some(itens) = fila.as_array_mut() {
+                    for f in itens.iter_mut() {
+                        if f["id"].as_str() == Some(id) {
+                            if sim {
+                                f["starred"] = json!("sim");
+                            } else if let Some(o) = f.as_object_mut() {
+                                o.remove("starred");
+                            }
+                        }
+                    }
+                    std::fs::write(FILA, serde_json::to_string(&fila).unwrap_or_default())
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn favoritas(&self) -> Result<Vec<Value>, String> {
+        Ok(Self::lista(&self.get("getStarred2", &[])?["starred2"]["song"]))
+    }
+
+    /// Mantém a faixa atual e embaralha o resto da fila.
+    pub fn embaralhar_fila(&self) -> Result<(), String> {
+        let mut fila = fila();
+        let pos = mpv_prop("playlist-pos").and_then(|v| v.as_i64()).unwrap_or(0).max(0) as usize;
+        if fila.is_empty() || pos >= fila.len() {
+            return Ok(());
+        }
+        let atual = fila.remove(pos);
+        let mut x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+        for i in (1..fila.len()).rev() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            fila.swap(i, (x % (i as u64 + 1)) as usize);
+        }
+        mpv(json!(["playlist-clear"]));
+        for f in &fila {
+            let u = self.url("stream", &[("id", f["id"].as_str().unwrap_or(""))])?;
+            mpv(json!(["loadfile", u, "append"]));
+        }
+        let mut nova = vec![atual];
+        nova.extend(fila);
+        std::fs::write(FILA, serde_json::to_string(&nova).unwrap_or_default()).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Troca a fila do mpv por estas faixas, começando da escolhida.
     pub fn tocar(&self, faixas: &[Value], inicio: usize) -> Result<(), String> {
         if faixas.is_empty() {
@@ -259,6 +312,8 @@ pub struct Estado {
     pub pos: usize,
     pub total: usize,
     pub volume: f64,
+    pub favorita: bool,
+    pub repetir: String,
 }
 
 pub fn estado() -> Option<Estado> {
@@ -281,7 +336,57 @@ pub fn estado() -> Option<Estado> {
         pos: pos as usize,
         total,
         volume: mpv_prop("volume").and_then(|v| v.as_f64()).unwrap_or(80.0),
+        favorita: f["starred"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        repetir: modo_repetir(),
     })
+}
+
+/// Define o modo de repetição do mpv: "nao", "tudo" ou "uma".
+pub fn repetir(modo: &str) {
+    let (lista, arquivo) = match modo {
+        "tudo" => ("inf", "no"),
+        "uma" => ("no", "inf"),
+        _ => ("no", "no"),
+    };
+    mpv(json!(["set_property", "loop-playlist", lista]));
+    mpv(json!(["set_property", "loop-file", arquivo]));
+}
+
+/// Lê o modo de repetição atual do mpv.
+pub fn modo_repetir() -> String {
+    let ligado = |v: Option<Value>| match v {
+        Some(Value::Bool(b)) => b,
+        Some(Value::String(s)) => s != "no",
+        _ => false,
+    };
+    if ligado(mpv_prop("loop-file")) {
+        "uma".into()
+    } else if ligado(mpv_prop("loop-playlist")) {
+        "tudo".into()
+    } else {
+        "nao".into()
+    }
+}
+
+/// Metadados da fila atual (vazio se o arquivo não existir ou estiver quebrado).
+pub fn fila() -> Vec<Value> {
+    std::fs::read_to_string(FILA)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn pular_para(i: usize) {
+    mpv(json!(["playlist-play-index", i]));
+}
+
+pub fn remover_da_fila(i: usize) {
+    mpv(json!(["playlist-remove", i]));
+    let mut fila = fila();
+    if i < fila.len() {
+        fila.remove(i);
+        let _ = std::fs::write(FILA, serde_json::to_string(&fila).unwrap_or_default());
+    }
 }
 
 pub fn controle(c: &str) {

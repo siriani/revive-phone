@@ -13,7 +13,7 @@ use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPix
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppWindow, Aparelho, Bolha, Faixa, Item, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppWindow, Aparelho, Bolha, Faixa, FilaItem, Item, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -552,6 +552,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     if tela == "telegram" {
         return abrir_telegram(ui);
     }
+    if tela == "fila" {
+        carregar_fila(ui);
+    }
     if tela == "musica-conf" {
         abrir_conf(ui);
     }
@@ -673,8 +676,25 @@ fn abrir_album_pagina(ui: &AppWindow, album: Value) {
     });
 }
 
+/// Fila do mpv na tela "Fila" (a faixa atual destacada).
+fn carregar_fila(ui: &AppWindow) {
+    let pos = dados::mpv_prop("playlist-pos").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let itens: Vec<FilaItem> = musica::fila()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| FilaItem {
+            titulo: ss(f["title"].as_str().unwrap_or("?")),
+            artista: ss(f["artist"].as_str().unwrap_or("")),
+            tocando: i as i64 == pos,
+        })
+        .collect();
+    ui.set_fila_itens(ModelRc::new(VecModel::from(itens)));
+}
+
 fn mus_navegar(ui: &AppWindow, k: &str) {
     match k {
+        "favoritas" => musica_abrir(ui, "favoritas"),
+        "fila" => ir(ui, "fila"),
         "home" => carregar_musica(ui),
         "buscar" => musica_abrir(ui, "buscar"),
         "artistas" => musica_abrir(ui, "artistas"),
@@ -1106,6 +1126,7 @@ fn musica_abrir(ui: &AppWindow, chave: &str) {
             let tipo = chave.to_string();
             abrir_lista(ui, titulo, move |s| Ok(itens_albuns(s.lista_albuns(&tipo)?)));
         }
+        "favoritas" => abrir_lista(ui, "Favoritas", |s| Ok(itens_faixas(s.favoritas()?, true))),
         "aleatorias" => abrir_lista(ui, "Músicas aleatórias", |s| Ok(itens_faixas(s.aleatorias()?, true))),
         "playlists" => abrir_lista(ui, "Playlists", |s| {
             Ok(s.playlists()?
@@ -1157,6 +1178,12 @@ fn aplicar_player(ui: &AppWindow, st: Option<musica::Estado>) {
     ui.set_toc_posicao(ss(format!("{} de {}", st.pos + 1, st.total)));
     ui.set_toc_pausa(st.pausa);
     ui.set_toc_volume(ss(format!("volume {:.0}%", st.volume)));
+    ui.set_toc_vol((st.volume / 100.0).clamp(0.0, 1.0) as f32);
+    ui.set_toc_favorita(st.favorita);
+    ui.set_toc_repetir(ss(st.repetir.clone()));
+    if ui.get_tela() == "fila" {
+        carregar_fila(ui);
+    }
     ui.set_tocando(ss(curto(
         &format!("{} {} — {}", if st.pausa { "▶" } else { "❚❚" }, st.titulo, st.artista),
         34,
@@ -1486,9 +1513,61 @@ pub fn ligar(ui: &AppWindow) {
             }
         }
     });
-    ui.on_controle(|c| {
-        let c = c.to_string();
-        std::thread::spawn(move || musica::controle(&c));
+    let f = ui.as_weak();
+    ui.on_controle(move |c| {
+        let Some(ui) = f.upgrade() else { return };
+        match c.as_str() {
+            "aleatorio" => {
+                let ligar = !ui.get_toc_aleatorio();
+                ui.set_toc_aleatorio(ligar);
+                if ligar {
+                    std::thread::spawn(|| {
+                        if let Err(e) = api().embaralhar_fila() {
+                            eprintln!("embaralhar: {e}");
+                        }
+                    });
+                }
+            }
+            "repetir" => {
+                let novo = match ui.get_toc_repetir().as_str() {
+                    "nao" => "tudo",
+                    "tudo" => "uma",
+                    _ => "nao",
+                };
+                ui.set_toc_repetir(ss(novo));
+                std::thread::spawn(move || musica::repetir(novo));
+            }
+            "favoritar" => {
+                let sim = !ui.get_toc_favorita();
+                ui.set_toc_favorita(sim);
+                let id = EST.with_borrow(|e| e.ultimo_id.clone());
+                std::thread::spawn(move || {
+                    if let Err(e) = api().favoritar(&id, sim) {
+                        eprintln!("favoritar: {e}");
+                    }
+                });
+            }
+            "artista" | "album" => {}
+            outro => {
+                let c = outro.to_string();
+                std::thread::spawn(move || musica::controle(&c));
+            }
+        }
+    });
+    ui.on_volume_mudar(|v| {
+        std::thread::spawn(move || {
+            dados::mpv(serde_json::json!(["set_property", "volume", (v as f64 * 100.0).round()]));
+        });
+    });
+    let f = ui.as_weak();
+    ui.on_fila_tocar(move |i| {
+        musica::pular_para(i.max(0) as usize);
+        f.upgrade().iter().for_each(|ui| ir(ui, "tocando"));
+    });
+    let f = ui.as_weak();
+    ui.on_fila_remover(move |i| {
+        musica::remover_da_fila(i.max(0) as usize);
+        f.upgrade().iter().for_each(carregar_fila);
     });
     ui.on_pular(|fr| {
         std::thread::spawn(move || musica::pular(fr));

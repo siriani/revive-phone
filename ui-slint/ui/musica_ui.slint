@@ -1,0 +1,503 @@
+// Revive: telas de música (Slint). Paisagem 1280x720, renderizador por software.
+// Três componentes: tela "tocando agora", fila de reprodução e trilho de navegação.
+// Tudo com x/y explícitos (sem layouts), fontes só 26/34/44px, alvos de toque >= 64px.
+
+import { AppBar, FloatingActionButton, FABStyle, Slider } from "@material";
+import { Tema } from "tema.slint";
+
+export struct FilaItem { titulo: string, artista: string, tocando: bool }
+
+// Botão de ícone próprio (o IconButton do Material não aceita cor), 72x72 com ícone tingido.
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : #00000000;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.cor;
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Item do trilho de navegação: pílula (indicador M3) atrás do ícone + rótulo embaixo.
+component ItemTrilho inherits Rectangle {
+    in property <image> icone;
+    in property <string> rotulo;
+    in property <bool> ativo;
+    callback clicado();
+
+    width: 128px;
+    height: 104px;
+    background: #00000000;
+
+    Rectangle {
+        x: 32px;
+        y: 8px;
+        width: 64px;
+        height: 40px;
+        border-radius: 20px;
+        background: root.ativo ? Tema.destaque-suave : #00000000;
+    }
+
+    Image {
+        x: 50px;
+        y: 14px;
+        width: 28px;
+        height: 28px;
+        source: root.icone;
+        colorize: root.ativo ? Tema.texto : Tema.texto-sec;
+        image-fit: contain;
+    }
+
+    Text {
+        x: 0px;
+        y: 56px;
+        width: 128px;
+        height: 40px;
+        text: root.rotulo;
+        font-size: Tema.texto-corpo;
+        color: root.ativo ? Tema.texto : Tema.texto-sec;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: no-wrap;
+        overflow: elide;
+    }
+
+    TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.clicado(); }
+    }
+}
+
+// ---------------------------------------------------------------- tocando agora
+
+export component TelaTocandoMat inherits Rectangle {
+    in property <string> titulo;
+    in property <string> artista;
+    in property <string> album;
+    in property <image> capa;
+    // in-out: o Slider escreve o valor ao arrastar; com in-out o binding continua vivo
+    in-out property <float> progresso;
+    in property <string> tempo;
+    in property <string> duracao;
+    in property <bool> pausa;
+    in property <bool> aleatorio;
+    in property <string> repetir;
+    in property <bool> favorita;
+    // in-out pelo mesmo motivo de progresso
+    in-out property <float> volume;
+
+    callback controle(string);
+    callback pular(float);
+    callback volume-mudar(float);
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: "Tocando agora";
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        trailing_button: { icon: @image-url("icones/queue_music.svg"), enabled: true };
+        leading_button_clicked => { root.controle("voltar"); }
+        trailing_button_clicked => { root.controle("fila"); }
+    }
+
+    // capa 520x520 com cantos arredondados
+    Rectangle {
+        x: 40px;
+        y: 110px;
+        width: 520px;
+        height: 520px;
+        border-radius: Tema.raio-g;
+        clip: true;
+        background: Tema.superficie;
+
+        Image {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            source: root.capa;
+            image-fit: cover;
+        }
+    }
+
+    // título
+    Text {
+        x: 620px;
+        y: 110px;
+        width: 620px;
+        height: 56px;
+        text: root.titulo;
+        font-size: Tema.texto-cabecalho;
+        font-family: "DejaVu Sans Bold";
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    // artista (tocável)
+    Rectangle {
+        x: 620px;
+        y: 176px;
+        width: 620px;
+        height: 64px;
+        background: #00000000;
+        Text {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            text: root.artista;
+            font-size: Tema.texto-corpo;
+            color: Tema.destaque;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.controle("artista"); }
+        }
+    }
+
+    // álbum (tocável)
+    Rectangle {
+        x: 620px;
+        y: 240px;
+        width: 620px;
+        height: 64px;
+        background: #00000000;
+        Text {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            text: root.album;
+            font-size: Tema.texto-corpo;
+            color: Tema.destaque;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.controle("album"); }
+        }
+    }
+
+    // progresso
+    Slider {
+        x: 620px;
+        y: 312px;
+        width: 620px;
+        height: 64px;
+        enabled: true;
+        minimum: 0;
+        maximum: 1;
+        value <=> root.progresso;
+        value_changed(v) => { root.pular(v); }
+    }
+
+    Text {
+        x: 620px;
+        y: 376px;
+        width: 200px;
+        height: 40px;
+        text: root.tempo;
+        font-size: Tema.texto-corpo;
+        color: Tema.texto-sec;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 1040px;
+        y: 376px;
+        width: 200px;
+        height: 40px;
+        text: root.duracao;
+        font-size: Tema.texto-corpo;
+        color: Tema.texto-sec;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    // controles: aleatório, anterior, play/pausa (FAB), próxima, repetir
+    BotaoIcone {
+        x: 634px;
+        y: 430px;
+        icone: @image-url("icones/shuffle.svg");
+        cor: root.aleatorio ? Tema.destaque : Tema.texto-sec;
+        clicado => { root.controle("aleatorio"); }
+    }
+
+    BotaoIcone {
+        x: 764px;
+        y: 430px;
+        icone: @image-url("icones/skip_previous.svg");
+        cor: Tema.texto;
+        clicado => { root.controle("anterior"); }
+    }
+
+    FloatingActionButton {
+        x: 885px;
+        y: 394px;
+        style: FABStyle.large;
+        icon: root.pausa ? @image-url("icones/play_arrow.svg") : @image-url("icones/pause.svg");
+        clicked => { root.controle("pausar"); }
+    }
+
+    BotaoIcone {
+        x: 1024px;
+        y: 430px;
+        icone: @image-url("icones/skip_next.svg");
+        cor: Tema.texto;
+        clicado => { root.controle("proxima"); }
+    }
+
+    BotaoIcone {
+        x: 1154px;
+        y: 430px;
+        icone: root.repetir == "uma" ? @image-url("icones/repeat_one.svg") : @image-url("icones/repeat.svg");
+        cor: root.repetir != "nao" ? Tema.destaque : Tema.texto-sec;
+        clicado => { root.controle("repetir"); }
+    }
+
+    // curtir + volume
+    BotaoIcone {
+        x: 620px;
+        y: 560px;
+        icone: root.favorita ? @image-url("icones/favorite_fill.svg") : @image-url("icones/favorite.svg");
+        cor: root.favorita ? Tema.erro : Tema.texto-sec;
+        clicado => { root.controle("favoritar"); }
+    }
+
+    Image {
+        x: 720px;
+        y: 578px;
+        width: 36px;
+        height: 36px;
+        source: @image-url("icones/volume_up.svg");
+        colorize: Tema.texto-sec;
+        image-fit: contain;
+    }
+
+    Slider {
+        x: 780px;
+        y: 560px;
+        width: 460px;
+        height: 64px;
+        enabled: true;
+        minimum: 0;
+        maximum: 1;
+        value <=> root.volume;
+        value_changed(v) => { root.volume-mudar(v); }
+    }
+}
+
+// ---------------------------------------------------------------- fila
+
+export component TelaFila inherits Rectangle {
+    in property <[FilaItem]> itens;
+
+    callback tocar(int);
+    callback remover(int);
+    callback voltar();
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: "Fila";
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    Text {
+        x: 0px;
+        y: 300px;
+        width: 1280px;
+        height: 60px;
+        visible: root.itens.length == 0;
+        text: "Fila vazia";
+        font-size: Tema.texto-titulo;
+        color: Tema.texto-sec;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Flickable {
+        x: 0px;
+        y: 96px;
+        width: 1280px;
+        height: 624px;
+        content-height: root.itens.length * 96px;
+
+        for item[i] in root.itens: Rectangle {
+            x: 0px;
+            y: i * 96px;
+            width: 1280px;
+            height: 96px;
+            background: item.tocando ? Tema.destaque-suave : #00000000;
+
+            Text {
+                x: 24px;
+                y: 0px;
+                width: 56px;
+                height: 96px;
+                text: "\{i + 1}";
+                font-size: Tema.texto-corpo;
+                color: item.tocando ? Tema.destaque : Tema.texto-sec;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 96px;
+                y: 8px;
+                width: 980px;
+                height: 42px;
+                text: item.titulo;
+                font-size: Tema.texto-corpo;
+                font-family: item.tocando ? "DejaVu Sans Bold" : "DejaVu Sans";
+                color: item.tocando ? Tema.sobre-destaque-suave : Tema.texto;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 96px;
+                y: 50px;
+                width: 980px;
+                height: 38px;
+                text: item.artista;
+                font-size: Tema.texto-corpo;
+                color: Tema.texto-sec;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: center;
+            }
+
+            if item.tocando: Image {
+                x: 1084px;
+                y: 30px;
+                width: 36px;
+                height: 36px;
+                source: @image-url("icones/equalizer.svg");
+                colorize: Tema.destaque;
+                image-fit: contain;
+            }
+
+            TouchArea {
+                x: 0px;
+                y: 0px;
+                width: 1280px;
+                height: 96px;
+                clicked => { root.tocar(i); }
+            }
+
+            BotaoIcone {
+                x: 1192px;
+                y: 12px;
+                icone: @image-url("icones/close.svg");
+                cor: Tema.texto-sec;
+                clicado => { root.remover(i); }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- trilho
+
+export component RailMusica inherits Rectangle {
+    in property <string> atual;
+    callback ir(string);
+
+    width: 128px;
+    height: 720px;
+    background: Tema.superficie;
+
+    ItemTrilho {
+        x: 0px;
+        y: 16px;
+        icone: @image-url("icones/home.svg");
+        rotulo: "Início";
+        ativo: root.atual == "home";
+        clicado => { root.ir("home"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 120px;
+        icone: @image-url("icones/library_music.svg");
+        rotulo: "Biblioteca";
+        ativo: root.atual == "biblioteca";
+        clicado => { root.ir("biblioteca"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 224px;
+        icone: @image-url("icones/search.svg");
+        rotulo: "Buscar";
+        ativo: root.atual == "buscar";
+        clicado => { root.ir("buscar"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 328px;
+        icone: @image-url("icones/queue_music.svg");
+        rotulo: "Fila";
+        ativo: root.atual == "fila";
+        clicado => { root.ir("fila"); }
+    }
+
+    ItemTrilho {
+        x: 0px;
+        y: 432px;
+        icone: @image-url("icones/settings.svg");
+        rotulo: "Ajustes";
+        ativo: root.atual == "ajustes";
+        clicado => { root.ir("ajustes"); }
+    }
+}

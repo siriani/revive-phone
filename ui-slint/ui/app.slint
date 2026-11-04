@@ -2,8 +2,10 @@ import "fontes/DejaVuSans.ttf";
 import "fontes/DejaVuSansBold-Familia.ttf";
 import { Tema } from "tema.slint";
 export { Tema }
+export { FilaItem } from "musica_ui.slint";
 import { Esquemas } from "esquemas.slint";
 import { MenuInner } from "../material/ui/components/menu.slint";
+import { TelaTocandoMat, TelaFila, RailMusica, FilaItem } from "musica_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
          MaterialTypography, MaterialPalette, MenuItem } from "@material";
@@ -503,10 +505,11 @@ component MusicaInicio inherits Rectangle {
         x: 0; y: 0; width: 210px; height: 640px; background: Tema.superficie-baixa;
         property <[{t: string, k: string}]> itens: [
             {t: "Início", k: "home"}, {t: "Buscar", k: "buscar"}, {t: "Artistas", k: "artistas"},
-            {t: "Playlists", k: "playlists"}, {t: "Aleatórias", k: "aleatorias"}, {t: "⚙ Ajustes", k: "ajustes"},
+            {t: "Playlists", k: "playlists"}, {t: "Aleatórias", k: "aleatorias"}, {t: "♥ Favoritas", k: "favoritas"},
+            {t: "Fila", k: "fila"}, {t: "⚙ Ajustes", k: "ajustes"},
             {t: "◀ Revive", k: "revive"}
         ];
-        for n[i] in self.itens: Botao { x: 12px; y: 14px + i * 87px; width: 186px; height: 74px; texto: n.t;
+        for n[i] in self.itens: Botao { x: 12px; y: 6px + i * 70px; width: 186px; height: 62px; texto: n.t;
                                         fonte: 26px; cor: Tema.superficie-baixa; clicado => { root.navegar(n.k); } }
     }
     if root.mensagem != "": Text { x: 210px; y: 280px; width: 1070px; text: root.mensagem; font-size: 34px;
@@ -1053,6 +1056,14 @@ export component AppWindow inherits Window {
     in property <string> toc-posicao;
     in property <bool> toc-pausa;
     in property <string> toc-volume;
+    in-out property <float> toc-vol;
+    in-out property <bool> toc-aleatorio;
+    in property <bool> toc-favorita;
+    in property <string> toc-repetir: "nao";
+    in property <[FilaItem]> fila-itens;
+    callback volume-mudar(float);
+    callback fila-tocar(int);
+    callback fila-remover(int);
 
     callback ir(string);
     callback atualizar-btc();
@@ -1200,14 +1211,25 @@ export component AppWindow inherits Window {
             pagina-mudar(d) => { root.pagina-mudar(d); }
             voltar => { root.lista-voltar(); }
         }
-        if root.tela == "tocando": TelaTocando {
-            width: 1280px; height: 720px; ativo: root.toc-ativo; titulo: root.toc-titulo;
+        if root.tela == "tocando": TelaTocandoMat {
+            width: 1280px; height: 720px; titulo: root.toc-titulo;
             artista: root.toc-artista; album: root.toc-album; capa: root.toc-capa;
             progresso: root.toc-progresso; tempo: root.toc-tempo; duracao: root.toc-duracao;
-            posicao: root.toc-posicao; pausa: root.toc-pausa; volume: root.toc-volume;
-            controle(c) => { root.controle(c); }
+            pausa: root.toc-pausa; volume: root.toc-vol; aleatorio: root.toc-aleatorio;
+            favorita: root.toc-favorita; repetir: root.toc-repetir;
+            controle(c) => {
+                if c == "voltar" { root.ir("musica"); }
+                else if c == "fila" { root.ir("fila"); }
+                else { root.controle(c); }
+            }
             pular(f) => { root.pular(f); }
-            ir(t) => { root.ir(t); }
+            volume-mudar(v) => { root.volume-mudar(v); }
+        }
+        if root.tela == "fila": TelaFila {
+            width: 1280px; height: 720px; itens: root.fila-itens;
+            tocar(i) => { root.fila-tocar(i); }
+            remover(i) => { root.fila-remover(i); }
+            voltar => { root.ir("tocando"); }
         }
     }
 
