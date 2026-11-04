@@ -733,3 +733,108 @@ msgstr ""
 
 msgid "não consegui apagar: {}"
 msgstr ""
+
+msgid "Loja"
+msgstr ""
+
+msgid "Sobre"
+msgstr ""
+
+msgid "Brilho"
+msgstr ""
+
+msgid "Armazenamento (raiz)"
+msgstr ""
+
+msgid "CMA"
+msgstr ""
+
+msgid "Carregados"
+msgstr ""
+
+msgid "Compatible"
+msgstr ""
+
+msgid "DRM"
+msgstr ""
+
+msgid "Distribuição"
+msgstr ""
+
+msgid "Energia e sensores"
+msgstr ""
+
+msgid "Entradas"
+msgstr ""
+
+msgid "Fontes"
+msgstr ""
+
+msgid "Framebuffer"
+msgstr ""
+
+msgid "GPU"
+msgstr ""
+
+msgid "Kernel"
+msgstr ""
+
+msgid "Luz de fundo"
+msgstr ""
+
+msgid "Memória"
+msgstr ""
+
+msgid "Modelo"
+msgstr ""
+
+msgid "Placas"
+msgstr ""
+
+msgid "Processador"
+msgstr ""
+
+msgid "Processadores remotos"
+msgstr ""
+
+msgid "Rede e rádio"
+msgstr ""
+
+msgid "Resolução"
+msgstr ""
+
+msgid "Sensores IIO"
+msgstr ""
+
+msgid "SoC"
+msgstr ""
+
+msgid "Swap"
+msgstr ""
+
+msgid "Temperatura"
+msgstr ""
+
+msgid "Total"
+msgstr ""
+
+msgid "Usada"
+msgstr ""
+
+msgid "Versão do Revive"
+msgstr ""
+
+msgid "Vídeo"
+msgstr ""
+
+msgid "Áudio"
+msgstr ""
+
+msgid "Aparelho"
+msgstr ""
+
+msgid "Sistema"
+msgstr ""
+
+msgid "Módulos-chave"
+msgstr ""

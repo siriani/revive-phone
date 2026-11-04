@@ -16,12 +16,14 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
 | GPS | ✅ | sees satellites (fix needs open sky) |
 | Vibration, temperatures | ✅ | |
 | Notification LED | ⚠️ | LPG + MPP6 driver loads, not visually confirmed |
-| CPU frequency | ⚠️ | 300–787 MHz stable. **1.19 GHz is experimental and untested**: APC regulator driver + fixed OPP voltages, no CPR ([patches/cpu](patches/cpu/)) |
+| CPU frequency | ✅ | up to 1.19 GHz with the APC regulator driver and fixed OPP voltages, no CPR ([patches/cpu](patches/cpu/)); stable under a 4-core load (70 °C). `revive-video` caps it at 998 MHz by default |
 | Backlight (WLED, PM8226) | ✅ | `qcom_wled`, loaded with the display driver |
 | GPU (Adreno 305) | ✅ | Mesa freedreno (FD305, OpenGL 3.1); `a300_pm4.fw` and `a300_pfp.fw` from linux-firmware |
 | ADSP (LPASS) | ✅ | remoteproc with the firmware extracted from the stock Android (not redistributed) |
-| Camera (front MT9M114) | ✅ | captures frames through CAMSS (CSIPHY 1, one lane, `data-lanes = <0>`) ([patches/camera](patches/camera/)). Clock/VFE 4.0 tuning in `camera/experimental/` is untested. Rear AR0543 not supported |
-| Audio (speaker/jack) | ⚠️ | codec detected, no sound yet: SLIMbus NGD in PIO mode, the WCD9306 enumerates (chip id 0x0103) ([patches/audio](patches/audio/)). No audio path yet |
+| Camera (front MT9M114) | ✅ | CAMSS (CSIPHY 1, one lane, `data-lanes = <0>`) ([patches/camera](patches/camera/)); full frames with the [no-IOMMU fixes](patches/camera/dma-fixes/) |
+| Camera (rear AR0543, 5 MP) | ⚠️ | works (1280×960 RAW10, debayered in the app), but the sensor driver is **not published**: its register tables come from a proprietary library |
+| Audio (loudspeaker) | ✅ | ADSP (APR/QDSP6) → SLIMbus → WCD9302 codec → speaker ([patches/audio](patches/audio/)). Needs the audio DTB; volume keys work |
+| Audio (headphone jack, microphone) | ❌ | not done yet (MBHC, capture path) |
 
 ## Fixes in this folder
 
@@ -57,7 +59,10 @@ All kernel patches are GPL-2.0 and apply to the msm8226-mainline tree
 | [`display/`](patches/display/) | CMI 720p panel driver (`motorola,falcon-panel-cmi`) | tested |
 | [`camera/`](patches/camera/) | CAMSS for MSM8226: binding, driver, `camss` node in the SoC dtsi | tested (front camera captures). **Required to build this DTS**, which uses `&camss` |
 | [`camera/experimental/`](patches/camera/experimental/) | MSM8226 clock rates, CSID setup, VFE 4.0 + VBIF | experimental, untested |
-| [`audio/`](patches/audio/) | SLIMbus NGD PIO mode, pd-mapper table, WCD9306 skeleton, NGD node in the SoC dtsi; [`falcon-slim-ngd.dtso`](patches/audio/falcon-slim-ngd.dtso) enables it on the phone | tested: the codec enumerates, no sound yet |
+| [`camera/dma-fixes/`](patches/camera/dma-fixes/) | CAMSS without an IOMMU: contiguous buffers, RDI write-master limit, stop_streaming, CSID1 on single-VFE SoCs | tested: no writes past the buffer, full frames |
+| [`audio/`](patches/audio/) | SLIMbus NGD PIO mode, pd-mapper table, NGD node in the SoC dtsi; [`falcon-slim-ngd.dtso`](patches/audio/falcon-slim-ngd.dtso) enables it on the phone | tested |
+| [`audio/qdsp6/`](patches/audio/qdsp6/) | APR/QDSP6 on the MSM8226 ADSP, the `qcom,msm8226-sndcard` machine driver and the falcon audio DTS | tested: playback through the loudspeaker |
+| [`audio/wcd9306/`](patches/audio/wcd9306/) | WCD9306/9302 codec driver (speaker path, volumes) and a `regmap-slimbus` fix | tested |
 | [`cpu/`](patches/cpu/) | APC (CPU) regulator on PM8226 S2 + [`msm8226-motorola-falcon-cpufreq.dtsi`](patches/cpu/msm8226-motorola-falcon-cpufreq.dtsi) (include it at the end of the DTS) | experimental, untested: a wrong voltage can hang the phone |
 
 ## Testing safely

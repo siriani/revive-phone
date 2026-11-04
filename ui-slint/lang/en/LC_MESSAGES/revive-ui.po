@@ -597,7 +597,7 @@ msgid "Nenhum nó ou mensagem ainda"
 msgstr "No nodes or messages yet"
 
 msgid "Sobre o sistema"
-msgstr "About the system"
+msgstr "About"
 
 msgid "IP do nó Meshtastic (Wi-Fi)"
 msgstr "Meshtastic node IP (Wi-Fi)"
@@ -742,3 +742,108 @@ msgstr "No photos yet"
 
 msgid "não consegui apagar: {}"
 msgstr "could not delete: {}"
+
+msgid "Loja"
+msgstr "Store"
+
+msgid "Sobre"
+msgstr "About"
+
+msgid "Brilho"
+msgstr "Brightness"
+
+msgid "Armazenamento (raiz)"
+msgstr "Storage (root)"
+
+msgid "CMA"
+msgstr "CMA"
+
+msgid "Carregados"
+msgstr "Loaded"
+
+msgid "Compatible"
+msgstr "Compatible"
+
+msgid "DRM"
+msgstr "DRM"
+
+msgid "Distribuição"
+msgstr "Distribution"
+
+msgid "Energia e sensores"
+msgstr "Power and sensors"
+
+msgid "Entradas"
+msgstr "Inputs"
+
+msgid "Fontes"
+msgstr "Supplies"
+
+msgid "Framebuffer"
+msgstr "Framebuffer"
+
+msgid "GPU"
+msgstr "GPU"
+
+msgid "Kernel"
+msgstr "Kernel"
+
+msgid "Luz de fundo"
+msgstr "Backlight"
+
+msgid "Memória"
+msgstr "Memory"
+
+msgid "Modelo"
+msgstr "Model"
+
+msgid "Placas"
+msgstr "Cards"
+
+msgid "Processador"
+msgstr "Processor"
+
+msgid "Processadores remotos"
+msgstr "Remote processors"
+
+msgid "Rede e rádio"
+msgstr "Network and radio"
+
+msgid "Resolução"
+msgstr "Resolution"
+
+msgid "Sensores IIO"
+msgstr "IIO sensors"
+
+msgid "SoC"
+msgstr "SoC"
+
+msgid "Swap"
+msgstr "Swap"
+
+msgid "Temperatura"
+msgstr "Temperature"
+
+msgid "Total"
+msgstr "Total"
+
+msgid "Usada"
+msgstr "Used"
+
+msgid "Versão do Revive"
+msgstr "Revive version"
+
+msgid "Vídeo"
+msgstr "Video"
+
+msgid "Áudio"
+msgstr "Audio"
+
+msgid "Aparelho"
+msgstr "Device"
+
+msgid "Sistema"
+msgstr "System"
+
+msgid "Módulos-chave"
+msgstr "Key modules"

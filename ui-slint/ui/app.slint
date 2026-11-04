@@ -811,10 +811,10 @@ component TelaAjustes inherits Rectangle {
     if root.brilho-disponivel: Rectangle {
         x: 300px; y: 106px; width: 932px; height: 68px; border-radius: 18px;
         background: Tema.superficie;
-        Text { x: 24px; y: 0px; width: 100px; height: parent.height; text: @tr("Brilho");
+        Text { x: 24px; y: 0px; width: 140px; height: parent.height; text: @tr("Brilho"); overflow: elide;
                font-size: Tema.texto-corpo; color: Tema.texto-sec; vertical-alignment: center; }
         Slider {
-            x: 128px; y: 12px; width: parent.width - 152px; height: 44px;
+            x: 172px; y: 12px; width: parent.width - 196px; height: 44px;
             enabled: true;
             minimum: 0.01;
             maximum: 1;
@@ -1012,7 +1012,7 @@ export component AppWindow inherits Window {
     out property <string> caracteres-embutidos:
         "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
         + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●"
-        + "◷≋✱⚙☁✉★⌂☀☠◉ⓘ◎";  // ícones dos apps (vêm do Rust, não estão em literais)
+        + "◷≋✱⚙☁✉★⌂☀☠◉ℹ◎";  // ícones dos apps (vêm do Rust, não estão em literais)
 
     in-out property <string> tela: "inicio";
     in property <[AppInfo]> apps;

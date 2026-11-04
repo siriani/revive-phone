@@ -36,7 +36,7 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("doom", "DOOM II", "☠", (150, 30, 20)),
     ("mesh", "Mesh", "◉", (30, 120, 70)),
     ("loja", "Loja", "↓", (40, 110, 90)),
-    ("sobre", "Sobre", "ⓘ", (60, 70, 110)),
+    ("sobre", "Sobre", "ℹ", (60, 70, 110)),
     ("ajustes", "Ajustes", "⚙", (70, 74, 84)),
 ];
 

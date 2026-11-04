@@ -11,30 +11,30 @@ What is planned, roughly in order. Device-specific items refer to the Motorola M
 - **GPU** — Adreno 305 with Mesa freedreno (FD305, OpenGL 3.1), using the linux-firmware
   `a300` firmware.
 - **ADSP** — the QDSP6 remoteproc boots with the firmware taken from the phone.
-- **Front camera (MT9M114)** — CAMSS ported to the MSM8226; the sensor streams frames
-  over CSIPHY 1 with one data lane (`data-lanes = <0>`, 19.2 MHz MCLK).
+- **Cameras** — front MT9M114 and rear AR0543 (5 MP, RAW10 debayered in the app) through
+  CAMSS, with the no-IOMMU fixes (contiguous buffers, RDI write limit). Camera app with
+  a front/rear switch. The AR0543 driver stays private (tables from a proprietary library).
+- **Audio (loudspeaker)** — the stock ADSP firmware speaks the mainline APR/QDSP6
+  protocol; machine driver `qcom,msm8226-sndcard` + a new WCD9306/9302 codec driver.
+  Music plays through the speaker; the output switches to a Bluetooth speaker when one
+  connects. Hardware volume keys.
+- **CPU at 1.19 GHz** — APC regulator driver and fixed OPP voltages; stable under load
+  (capped at 998 MHz by default).
+- **UI** — Rust + Slint, three languages, app store, Meshtastic, DOOM II, About screen.
 
 ## Big projects (kernel / hardware)
 
-- **Audio** — the SLIMbus NGD runs in PIO mode and the WCD9306 codec enumerates (chip
-  id 0x0103), but there is no sound yet. Next: the codec register map and DAPM
-  routes, the SLIMbus data channels and the ADSP (APR/Q6) DAIs; then the loudspeaker,
-  the headphone jack and the internal microphone (voice recorder app).
-- **Cameras**
-  - *Front (MT9M114)*: frames work. Next: test the MSM8226 clock rates and VFE 4.0
-    patches (`patches/camera/experimental/`), then libcamera / an app; two data lanes
-    like the stock firmware.
-  - *Rear (AR0543, 5 MP)*: needs a new sensor driver written from public documentation,
-    plus software processing of the raw Bayer frames (e.g. libcamera's software ISP).
-- **CPU at 1.19 GHz** — an APC regulator driver and fixed OPP voltages (the stock CPR
-  ceilings) are written but **untested** (`patches/cpu/`). Next: test 998 MHz first,
-  then 1.19 GHz under a stress test; real CPR later.
-- **Upstream** — send the panel driver, the MSM8226 CAMSS support, the SLIMbus NGD PIO
-  mode and the falcon DTS changes to the kernel mailing lists.
+- **Audio, part 2** — headphone jack (MBHC), earpiece and the microphones (capture
+  path), then a voice recorder app. Codec reset when the ADSP restarts.
+- **Boot reliability** — one boot with the audio DTB hung before userspace once (not
+  reproduced); find the cause.
+- **CPR** — real voltage scaling instead of fixed OPP voltages.
+- **Upstream** — the panel driver, MSM8226 CAMSS, the CAMSS no-IOMMU fixes, the SLIMbus
+  NGD PIO mode, the audio stack and the falcon DTS, to the kernel mailing lists.
 
 ## Apps
 
-- **Voice recorder** — waits for audio (above), or for a USB/Bluetooth microphone.
+- **Voice recorder** — waits for the microphone (above), or a USB/Bluetooth one.
 - **Music** — offline audio cache (play without network, size-limited) and a queue screen.
 - **YouTube** — search through an API, play with mpv + yt-dlp (audio first; low-resolution
   video now that the display driver works).
@@ -45,5 +45,4 @@ What is planned, roughly in order. Device-specific items refer to the Motorola M
 
 ## Fixes and packaging
 
-- The first tap right after the UI starts is sometimes ignored.
 - Publish a release with the prebuilt `revive-ui` binary so the installer can download it.
