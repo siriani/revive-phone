@@ -10,11 +10,11 @@ use std::time::Duration;
 use serde_json::Value;
 use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
-use crate::{brilho, clima, i18n, inicio, loja, mesh, sistema};
+use crate::{brilho, camera, clima, i18n, inicio, loja, mesh, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppLojaUi, AppOrdem, MsgMesh, NoMesh, SecaoSobre, ItemSobre, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppLojaUi, FotoUi, AppOrdem, MsgMesh, NoMesh, SecaoSobre, ItemSobre, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -32,6 +32,7 @@ const APPS: &[(&str, &str, &str, (u8, u8, u8))] = &[
     ("wifi", "Wi-Fi", "≋", (30, 70, 55)),
     ("bt", "Bluetooth", "✱", (45, 58, 90)),
     ("clima", "Clima", "☀", (176, 120, 20)),
+    ("camera", "Câmera", "◎", (52, 56, 66)),
     ("doom", "DOOM II", "☠", (150, 30, 20)),
     ("mesh", "Mesh", "◉", (30, 120, 70)),
     ("loja", "Loja", "↓", (40, 110, 90)),
@@ -566,6 +567,7 @@ fn tecla_fisica(ui: &AppWindow, t: &str) {
             _ => {}
         }
     } else if t == "[esc]" {
+        camera_parar();
         ui.set_tela(ss("inicio"));
     } else if t == " " && tela == "tocando" {
         std::thread::spawn(|| musica::controle("pausar"));
@@ -576,6 +578,16 @@ fn tecla_fisica(ui: &AppWindow, t: &str) {
 
 fn ir(ui: &AppWindow, tela: &str) {
     ui.set_aviso(ss(""));
+    // a câmera só fica ligada na tela dela (STREAMOFF ao sair)
+    if tela != "camera" {
+        camera_parar();
+    }
+    if tela == "camera" {
+        abrir_camera(ui);
+    }
+    if tela == "camera-galeria" {
+        abrir_galeria(ui);
+    }
     if let Some(id) = tela.strip_prefix("m:") {
         return abrir_manifesto(ui, id);
     }
@@ -1604,6 +1616,197 @@ fn abrir_sobre(ui: &AppWindow) {
     ui.set_sobre_cpu(ss(crate::sobre::cpu_resumo()));
 }
 
+// ---------------------------------------------------------------------- Câmera
+
+thread_local! {
+    /// captura ligada (só enquanto a tela "camera" está aberta)
+    static CAMERA: RefCell<Option<camera::Captura>> = RefCell::default();
+    /// fotos da galeria, na ordem da grade
+    static FOTOS: RefCell<Vec<std::path::PathBuf>> = RefCell::default();
+    static GAL_MODELO: RefCell<Option<Rc<VecModel<FotoUi>>>> = RefCell::default();
+}
+/// muda a cada abertura da galeria: descarta miniaturas de uma abertura anterior
+static GAL_GERACAO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn nome_foto(p: &std::path::Path) -> String {
+    p.file_stem().and_then(|n| n.to_str()).unwrap_or("").to_string()
+}
+
+/// Desliga a captura (a thread faz STREAMOFF e fecha o dispositivo).
+fn camera_parar() {
+    let c = CAMERA.with_borrow_mut(|c| c.take());
+    drop(c);
+}
+
+fn abrir_camera(ui: &AppWindow) {
+    camera_parar();
+    ui.set_cam_ativa(false);
+    ui.set_cam_ocupado(false);
+    ui.set_cam_preview(Image::default());
+    ui.set_cam_mensagem(ss(i18n::t("abrindo a câmera...")));
+    let fraca = ui.as_weak();
+    let cap = camera::iniciar(move || {
+        let _ = fraca.upgrade_in_event_loop(|ui| camera_drenar(&ui));
+    });
+    CAMERA.with_borrow_mut(|c| *c = Some(cap));
+    // miniatura da última foto
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let ultima = camera::listar_fotos(&camera::config().pasta).into_iter().next();
+        let mini = ultima.as_deref().and_then(camera::miniatura);
+        let _ = fraca.upgrade_in_event_loop(move |ui| match mini {
+            Some(m) => {
+                ui.set_cam_ultima(Image::from_rgb8(m));
+                ui.set_cam_tem_ultima(true);
+            }
+            None => ui.set_cam_tem_ultima(false),
+        });
+    });
+}
+
+/// Pega o quadro novo e os eventos da thread de captura.
+fn camera_drenar(ui: &AppWindow) {
+    if ui.get_tela() != "camera" {
+        // saiu da tela por um caminho que não passou por ir()
+        return camera_parar();
+    }
+    let (quadro, eventos) = CAMERA.with_borrow(|c| match c {
+        Some(c) => (c.quadro(), c.eventos()),
+        None => (None, vec![]),
+    });
+    for ev in eventos {
+        match ev {
+            camera::Evento::Pronta(w, h) => {
+                eprintln!("câmera pronta: {w}x{h}");
+                ui.set_cam_ativa(true);
+                if !ui.get_cam_ocupado() {
+                    ui.set_cam_mensagem(ss(""));
+                }
+            }
+            camera::Evento::Erro(m) => {
+                ui.set_cam_ativa(false);
+                ui.set_cam_ocupado(false);
+                ui.set_cam_mensagem(ss(m));
+            }
+            camera::Evento::Foto(Ok((caminho, mini))) => {
+                ui.set_cam_ocupado(false);
+                let nome = caminho.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                let msg = i18n::tf("foto salva: {}", &[&nome]);
+                ui.set_cam_mensagem(ss(msg.clone()));
+                if let Some(m) = mini {
+                    ui.set_cam_ultima(Image::from_rgb8(m));
+                    ui.set_cam_tem_ultima(true);
+                }
+                // a mensagem some depois de 3 s (se ninguém a trocou)
+                let fraca = ui.as_weak();
+                slint::Timer::single_shot(Duration::from_secs(3), move || {
+                    if let Some(ui) = fraca.upgrade() {
+                        if ui.get_cam_mensagem() == msg.as_str() {
+                            ui.set_cam_mensagem(ss(""));
+                        }
+                    }
+                });
+            }
+            camera::Evento::Foto(Err(e)) => {
+                ui.set_cam_ocupado(false);
+                ui.set_cam_mensagem(ss(i18n::tf("não consegui salvar a foto: {}", &[&curto(&e, 60)])));
+            }
+        }
+    }
+    if let Some(q) = quadro {
+        ui.set_cam_preview(Image::from_rgb8(q));
+    }
+}
+
+fn abrir_galeria(ui: &AppWindow) {
+    let geracao = GAL_GERACAO.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    ui.set_gal_aberta(-1);
+    ui.set_gal_foto(Image::default());
+    ui.set_gal_mensagem(ss(i18n::t("carregando...")));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let atual = || GAL_GERACAO.load(std::sync::atomic::Ordering::Relaxed) == geracao;
+        let fotos = camera::listar_fotos(&camera::config().pasta);
+        let lista = fotos.clone();
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            if GAL_GERACAO.load(std::sync::atomic::Ordering::Relaxed) != geracao {
+                return;
+            }
+            let v: Vec<FotoUi> =
+                lista.iter().map(|p| FotoUi { nome: ss(nome_foto(p)), miniatura: Image::default() }).collect();
+            let modelo = Rc::new(VecModel::from(v));
+            ui.set_gal_fotos(ModelRc::from(modelo.clone()));
+            GAL_MODELO.with_borrow_mut(|m| *m = Some(modelo));
+            FOTOS.with_borrow_mut(|f| *f = lista.clone());
+            ui.set_gal_mensagem(ss(if lista.is_empty() { i18n::t("Nenhuma foto ainda") } else { String::new() }));
+        });
+        // miniaturas uma a uma (do cache ou geradas)
+        for p in fotos {
+            if !atual() {
+                return;
+            }
+            let Some(m) = camera::miniatura(&p) else { continue };
+            let _ = fraca.upgrade_in_event_loop(move |_| {
+                if GAL_GERACAO.load(std::sync::atomic::Ordering::Relaxed) != geracao {
+                    return;
+                }
+                // procura pelo caminho: a lista pode ter mudado (foto apagada)
+                let Some(i) = FOTOS.with_borrow(|f| f.iter().position(|x| *x == p)) else { return };
+                GAL_MODELO.with_borrow(|modelo| {
+                    if let Some(modelo) = modelo {
+                        if let Some(mut f) = modelo.row_data(i) {
+                            f.miniatura = Image::from_rgb8(m);
+                            modelo.set_row_data(i, f);
+                        }
+                    }
+                });
+            });
+        }
+    });
+}
+
+fn galeria_abrir(ui: &AppWindow, i: i32) {
+    let Some(p) = FOTOS.with_borrow(|f| f.get(i.max(0) as usize).cloned()) else { return };
+    ui.set_gal_foto(Image::default());
+    ui.set_gal_aberta(i);
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let Some(q) = camera::carregar_foto(&p) else { return };
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            // só se a mesma foto continua aberta
+            let ainda = FOTOS.with_borrow(|f| f.get(ui.get_gal_aberta().max(0) as usize) == Some(&p));
+            if ui.get_gal_aberta() >= 0 && ainda {
+                ui.set_gal_foto(Image::from_rgb8(q));
+            }
+        });
+    });
+}
+
+fn galeria_apagar(ui: &AppWindow, i: i32) {
+    let i = i.max(0) as usize;
+    let Some(p) = FOTOS.with_borrow(|f| f.get(i).cloned()) else { return };
+    ui.set_gal_aberta(-1);
+    ui.set_gal_foto(Image::default());
+    match camera::apagar(&p) {
+        Ok(()) => {
+            FOTOS.with_borrow_mut(|f| {
+                f.remove(i);
+            });
+            GAL_MODELO.with_borrow(|m| {
+                if let Some(m) = m {
+                    if i < m.row_count() {
+                        m.remove(i);
+                    }
+                }
+            });
+            if FOTOS.with_borrow(|f| f.is_empty()) {
+                ui.set_gal_mensagem(ss(i18n::t("Nenhuma foto ainda")));
+            }
+        }
+        Err(e) => ui.set_gal_mensagem(ss(i18n::tf("não consegui apagar: {}", &[&curto(&e, 60)]))),
+    }
+}
+
 /// Apps nativos e de manifesto, na ordem padrão.
 fn todos_apps() -> Vec<AppInfo> {
     APPS.iter()
@@ -1864,6 +2067,31 @@ pub fn ligar(ui: &AppWindow) {
             ui.set_mesh_rascunho(ss(""));
         }
     });
+    let f = ui.as_weak();
+    ui.on_cam_disparar(move || {
+        let Some(ui) = f.upgrade() else { return };
+        if !ui.get_cam_ativa() || ui.get_cam_ocupado() {
+            return;
+        }
+        CAMERA.with_borrow(|c| {
+            if let Some(c) = c {
+                c.tirar_foto();
+            }
+        });
+        ui.set_cam_ocupado(true);
+        ui.set_cam_mensagem(ss(i18n::t("salvando a foto...")));
+    });
+    let f = ui.as_weak();
+    ui.on_gal_abrir(move |i| f.upgrade().iter().for_each(|ui| galeria_abrir(ui, i)));
+    let f = ui.as_weak();
+    ui.on_gal_fechar(move || {
+        if let Some(ui) = f.upgrade() {
+            ui.set_gal_aberta(-1);
+            ui.set_gal_foto(Image::default());
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_gal_apagar(move |i| f.upgrade().iter().for_each(|ui| galeria_apagar(ui, i)));
     let f = ui.as_weak();
     ui.on_loja_atualizar(move || f.upgrade().iter().for_each(abrir_loja));
     let f = ui.as_weak();

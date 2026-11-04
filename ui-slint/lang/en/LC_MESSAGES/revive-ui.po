@@ -700,3 +700,45 @@ msgstr "online"
 
 msgid "capacidade"
 msgstr "capacity"
+
+msgid "Câmera"
+msgstr "Camera"
+
+msgid "Galeria"
+msgstr "Gallery"
+
+msgid "Apagar esta foto?"
+msgstr "Delete this photo?"
+
+msgid "Apagar"
+msgstr "Delete"
+
+msgid "Câmera indisponível"
+msgstr "Camera unavailable"
+
+msgid "Câmera indisponível: {}"
+msgstr "Camera unavailable: {}"
+
+msgid "erro na câmera: {}"
+msgstr "camera error: {}"
+
+msgid "a câmera não está mandando imagens"
+msgstr "the camera is not sending images"
+
+msgid "abrindo a câmera..."
+msgstr "opening the camera..."
+
+msgid "salvando a foto..."
+msgstr "saving the photo..."
+
+msgid "foto salva: {}"
+msgstr "photo saved: {}"
+
+msgid "não consegui salvar a foto: {}"
+msgstr "could not save the photo: {}"
+
+msgid "Nenhuma foto ainda"
+msgstr "No photos yet"
+
+msgid "não consegui apagar: {}"
+msgstr "could not delete: {}"

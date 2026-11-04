@@ -8,6 +8,7 @@ export { HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 export { AppLojaUi } from "loja_ui.slint";
 export { NoMesh, MsgMesh } from "mesh_ui.slint";
 export { SecaoSobre, ItemSobre } from "sobre_ui.slint";
+export { FotoUi } from "camera_ui.slint";
 export { AppOrdem } from "inicio_ui.slint";
 
 // ícones do clima por nome (o Rust escolhe o nome; as imagens vêm embutidas)
@@ -32,6 +33,7 @@ import { TelaClima, TelaCidade, HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slin
 import { TelaLoja, TelaAppLoja, AppLojaUi } from "loja_ui.slint";
 import { TelaMesh, NoMesh, MsgMesh } from "mesh_ui.slint";
 import { TelaSobre, SecaoSobre, ItemSobre } from "sobre_ui.slint";
+import { TelaCamera, TelaGaleria, FotoUi } from "camera_ui.slint";
 import { TelaOrganizar, BotaoEditarInicio, AppOrdem } from "inicio_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
@@ -1010,7 +1012,7 @@ export component AppWindow inherits Window {
     out property <string> caracteres-embutidos:
         "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑýÿßøåæœÆŒØÅºª°§¹²³£€¢¥©®™±×÷µ¿¡"
         + "•·–—“”‘’«»…←→↑↓♪♫❚▶◀✕✓⇧⌫●"
-        + "◷≋✱⚙☁✉★⌂☀☠◉ⓘ";  // ícones dos apps (vêm do Rust, não estão em literais)
+        + "◷≋✱⚙☁✉★⌂☀☠◉ⓘ◎";  // ícones dos apps (vêm do Rust, não estão em literais)
 
     in-out property <string> tela: "inicio";
     in property <[AppInfo]> apps;
@@ -1191,6 +1193,21 @@ export component AppWindow inherits Window {
     callback mesh-configurar();
     in property <[SecaoSobre]> sobre-secoes;
     in property <string> sobre-cpu;
+    // câmera e galeria
+    in property <image> cam-preview;
+    in property <bool> cam-ativa;
+    in property <bool> cam-ocupado;
+    in property <string> cam-mensagem;
+    in property <image> cam-ultima;
+    in property <bool> cam-tem-ultima;
+    callback cam-disparar();
+    in property <[FotoUi]> gal-fotos;
+    in property <string> gal-mensagem;
+    in property <int> gal-aberta: -1;
+    in property <image> gal-foto;
+    callback gal-abrir(int);
+    callback gal-fechar();
+    callback gal-apagar(int);
     // organizar início
     in property <[AppOrdem]> org-apps;
     callback org-alternar(int);
@@ -1276,6 +1293,22 @@ export component AppWindow inherits Window {
         if root.tela == "sobre": TelaSobre {
             width: 1280px; height: 720px; secoes: root.sobre-secoes; cpu: root.sobre-cpu;
             voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "camera": TelaCamera {
+            width: 1280px; height: 720px; previa: root.cam-preview; ativa: root.cam-ativa;
+            ocupado: root.cam-ocupado; mensagem: root.cam-mensagem;
+            ultima: root.cam-ultima; tem-ultima: root.cam-tem-ultima;
+            voltar => { root.ir("inicio"); }
+            disparar => { root.cam-disparar(); }
+            galeria => { root.ir("camera-galeria"); }
+        }
+        if root.tela == "camera-galeria": TelaGaleria {
+            width: 1280px; height: 720px; fotos: root.gal-fotos; mensagem: root.gal-mensagem;
+            aberta: root.gal-aberta; foto: root.gal-foto;
+            voltar => { root.ir("camera"); }
+            abrir(i) => { root.gal-abrir(i); }
+            fechar => { root.gal-fechar(); }
+            apagar(i) => { root.gal-apagar(i); }
         }
         if root.tela == "loja": TelaLoja {
             width: 1280px; height: 720px; apps: root.loja-apps; mensagem: root.loja-msg;

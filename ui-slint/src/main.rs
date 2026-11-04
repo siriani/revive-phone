@@ -6,6 +6,7 @@
 
 mod app;
 mod brilho;
+mod camera;
 mod clima;
 mod cripto;
 mod dados;

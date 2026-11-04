@@ -1,0 +1,471 @@
+// Revive: app Câmera (Slint + Material 3). Paisagem 1280x720, renderizador por software.
+// TelaCamera: pré-visualização 4:3 (960x720) à esquerda; à direita o disparo (círculo
+// branco de 96px num anel), a mensagem de estado e a miniatura da última foto (abre a galeria).
+// TelaGaleria: grade de miniaturas (5 por linha); o toque abre a foto em tela cheia,
+// com voltar e apagar (com confirmação).
+// Tudo com x/y explícitos (sem layouts). Fontes só 21/24/26/34px.
+// Os textos dinâmicos usam os caracteres dos Texts invisíveis no fim de cada tela
+// (só caracteres literais no .slint entram na fonte embutida).
+
+import { AppBar } from "@material";
+import { Tema } from "tema.slint";
+
+export struct FotoUi { nome: string, miniatura: image }
+
+// Botão de ícone próprio (mesmo desenho das outras telas), 72x72 com ícone tingido;
+// `fundo` permite pô-lo sobre a imagem (círculo escuro translúcido).
+component BotaoIcone inherits Rectangle {
+    in property <image> icone;
+    in property <color> cor: Tema.texto-sec;
+    in property <color> fundo: #00000000;
+    in property <bool> ativo: true;
+    callback clicado();
+
+    width: 72px;
+    height: 72px;
+    border-radius: 36px;
+    background: toque.pressed ? Tema.toque : root.fundo;
+
+    Image {
+        x: 18px;
+        y: 18px;
+        width: 36px;
+        height: 36px;
+        source: root.icone;
+        colorize: root.ativo ? root.cor : root.cor.with-alpha(0.3);
+        image-fit: contain;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.ativo;
+        clicked => { root.clicado(); }
+    }
+}
+
+// Botão em pílula com texto 26px (confirmação de apagar).
+component BotaoTexto inherits Rectangle {
+    in property <string> texto;
+    in property <color> cor: Tema.destaque;
+    in property <color> cor-texto: Tema.sobre-destaque;
+    callback clicado();
+
+    width: 200px;
+    height: 64px;
+    border-radius: 32px;
+    background: toque.pressed ? root.cor.darker(0.2) : root.cor;
+    clip: true;
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        text: root.texto;
+        font-size: 26px;
+        color: root.cor-texto;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    toque := TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        clicked => { root.clicado(); }
+    }
+}
+
+// ---------------------------------------------------------------- câmera
+
+export component TelaCamera inherits Rectangle {
+    in property <image> previa;
+    // true enquanto chegam quadros
+    in property <bool> ativa;
+    // true enquanto a foto é salva
+    in property <bool> ocupado;
+    in property <string> mensagem;
+    in property <image> ultima;
+    in property <bool> tem-ultima;
+
+    callback voltar();
+    callback disparar();
+    callback galeria();
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    // ------------------------------------------ pré-visualização (x 0..960)
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 960px;
+        height: 720px;
+        background: #000000;
+        clip: true;
+
+        Image {
+            x: 0px;
+            y: 0px;
+            width: 960px;
+            height: 720px;
+            source: root.previa;
+            image-fit: contain;
+            visible: root.ativa;
+        }
+
+        // "abrindo a câmera...", "Câmera indisponível" e erros: no meio da área da imagem
+        Text {
+            x: 80px;
+            y: 220px;
+            width: 800px;
+            height: 280px;
+            text: root.mensagem;
+            font-size: 34px;
+            color: #ffffff;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            visible: !root.ativa;
+        }
+    }
+
+    // voltar, sobre a imagem
+    BotaoIcone {
+        x: 16px;
+        y: 16px;
+        icone: @image-url("icones/arrow_back.svg");
+        cor: #ffffff;
+        fundo: #00000066;
+        clicado => { root.voltar(); }
+    }
+
+    // ------------------------------------------ controles (x 960..1280)
+    Text {
+        x: 976px;
+        y: 24px;
+        width: 288px;
+        height: 48px;
+        text: @tr("Câmera");
+        font-size: 34px;
+        color: Tema.texto;
+        overflow: elide;
+        wrap: no-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // disparo: anel de 120px com o círculo branco de 96px
+    Rectangle {
+        x: 1060px;
+        y: 276px;
+        width: 120px;
+        height: 120px;
+        border-radius: 60px;
+        border-width: 6px;
+        border-color: root.ativa && !root.ocupado ? Tema.texto : Tema.contorno;
+        background: #00000000;
+
+        Rectangle {
+            x: 12px;
+            y: 12px;
+            width: 96px;
+            height: 96px;
+            border-radius: 48px;
+            border-width: 1px;
+            border-color: #00000033;
+            background: !root.ativa || root.ocupado ? #ffffff59
+                        : (disparo.pressed ? #cfcfcf : #ffffff);
+        }
+
+        disparo := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: 120px;
+            height: 120px;
+            enabled: root.ativa && !root.ocupado;
+            clicked => { root.disparar(); }
+        }
+    }
+
+    // estado com a câmera ligada ("salvando a foto...", "foto salva: ...")
+    Text {
+        x: 976px;
+        y: 412px;
+        width: 288px;
+        height: 120px;
+        text: root.mensagem;
+        font-size: 21px;
+        color: Tema.texto-sec;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: top;
+        visible: root.ativa;
+    }
+
+    // miniatura da última foto: abre a galeria
+    Rectangle {
+        x: 1072px;
+        y: 548px;
+        width: 96px;
+        height: 96px;
+        border-radius: Tema.raio-m;
+        border-width: 2px;
+        border-color: Tema.contorno;
+        background: galeria-toque.pressed ? Tema.superficie-alta : Tema.superficie;
+        clip: true;
+
+        if root.tem-ultima : Image {
+            x: 0px;
+            y: 0px;
+            width: 96px;
+            height: 96px;
+            source: root.ultima;
+            image-fit: cover;
+        }
+
+        galeria-toque := TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.galeria(); }
+        }
+    }
+    Text {
+        x: 976px;
+        y: 652px;
+        width: 288px;
+        height: 36px;
+        text: @tr("Galeria");
+        font-size: 24px;
+        color: Tema.texto-sec;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos para as mensagens (vêm do Rust).
+    Text { x: 0px; y: 0px; visible: false; text: "0123456789.,:;!?()[]%-_/'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúçñ¿¡…"; font-size: 34px; }
+    Text { x: 0px; y: 0px; visible: false; text: "0123456789.,:;!?()[]%-_/'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúçñ¿¡…"; font-size: 21px; }
+}
+
+// ---------------------------------------------------------------- galeria
+
+export component TelaGaleria inherits Rectangle {
+    in property <[FotoUi]> fotos;
+    // "Nenhuma foto ainda" ou erro; vazio = mostra a grade
+    in property <string> mensagem;
+    // índice da foto em tela cheia (-1 = nenhuma)
+    in property <int> aberta: -1;
+    in property <image> foto;
+
+    callback voltar();
+    callback abrir(int);
+    callback fechar();
+    callback apagar(int);
+
+    property <bool> confirmar: false;
+
+    width: 1280px;
+    height: 720px;
+    background: Tema.fundo;
+
+    changed aberta => { root.confirmar = false; }
+
+    // barra superior (y 0, altura 96)
+    AppBar {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 96px;
+        title: @tr("Galeria");
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    // grade: 5 miniaturas de 240x180 por linha (passo 252 x 196)
+    Flickable {
+        x: 0px;
+        y: 104px;
+        width: 1280px;
+        height: 616px;
+        interactive: true;
+        content-width: self.width;
+        content-height: max(self.height, ceil(root.fotos.length / 5) * 196px + 16px);
+
+        for f[i] in root.fotos : Rectangle {
+            x: 16px + mod(i, 5) * 252px;
+            y: floor(i / 5) * 196px;
+            width: 240px;
+            height: 180px;
+            border-radius: Tema.raio-p;
+            background: Tema.superficie;
+            clip: true;
+
+            Image {
+                x: 0px;
+                y: 0px;
+                width: 240px;
+                height: 180px;
+                source: f.miniatura;
+                image-fit: cover;
+            }
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 240px;
+                height: 180px;
+                background: toque-mini.pressed ? Tema.toque : #00000000;
+            }
+            toque-mini := TouchArea {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.abrir(i); }
+            }
+        }
+    }
+
+    Text {
+        x: 240px;
+        y: 260px;
+        width: 800px;
+        height: 200px;
+        text: root.mensagem;
+        font-size: 34px;
+        color: Tema.texto-sec;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        visible: root.mensagem != "";
+    }
+
+    // ------------------------------------------ foto em tela cheia
+    if root.aberta >= 0 : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 1280px;
+        height: 720px;
+        background: #000000;
+
+        // segura os toques (a grade embaixo não recebe)
+        TouchArea {
+            x: 0px;
+            y: 0px;
+            width: 1280px;
+            height: 720px;
+        }
+        Image {
+            x: 0px;
+            y: 0px;
+            width: 1280px;
+            height: 720px;
+            source: root.foto;
+            image-fit: contain;
+        }
+        Text {
+            x: 104px;
+            y: 16px;
+            width: 1072px;
+            height: 72px;
+            text: root.aberta < root.fotos.length ? root.fotos[root.aberta].nome : "";
+            font-size: 24px;
+            color: #ffffff;
+            overflow: elide;
+            wrap: no-wrap;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        BotaoIcone {
+            x: 16px;
+            y: 16px;
+            icone: @image-url("icones/arrow_back.svg");
+            cor: #ffffff;
+            fundo: #00000066;
+            clicado => { root.fechar(); }
+        }
+        BotaoIcone {
+            x: 1192px;
+            y: 16px;
+            icone: @image-url("icones/delete.svg");
+            cor: #ffffff;
+            fundo: #00000066;
+            clicado => { root.confirmar = true; }
+        }
+
+        // confirmação de apagar
+        if root.confirmar : Rectangle {
+            x: 0px;
+            y: 0px;
+            width: 1280px;
+            height: 720px;
+            background: #00000099;
+
+            TouchArea {
+                x: 0px;
+                y: 0px;
+                width: 1280px;
+                height: 720px;
+                clicked => { root.confirmar = false; }
+            }
+            Rectangle {
+                x: 390px;
+                y: 240px;
+                width: 500px;
+                height: 240px;
+                border-radius: Tema.raio-g;
+                background: Tema.superficie-alta;
+
+                // o cartão não fecha ao toque
+                TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                }
+                Text {
+                    x: 24px;
+                    y: 32px;
+                    width: 452px;
+                    height: 64px;
+                    text: @tr("Apagar esta foto?");
+                    font-size: 34px;
+                    color: Tema.texto;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                BotaoTexto {
+                    x: 36px;
+                    y: 144px;
+                    texto: @tr("Cancelar");
+                    cor: Tema.superficie;
+                    cor-texto: Tema.texto;
+                    clicado => { root.confirmar = false; }
+                }
+                BotaoTexto {
+                    x: 264px;
+                    y: 144px;
+                    texto: @tr("Apagar");
+                    cor: Tema.erro;
+                    cor-texto: #ffffff;
+                    clicado => {
+                        root.confirmar = false;
+                        root.apagar(root.aberta);
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ fontes
+    // Caracteres embutidos para os nomes das fotos e a mensagem (vêm do Rust).
+    Text { x: 0px; y: 0px; visible: false; text: "0123456789.,:;!?()[]%-_/'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúçñ¿¡…"; font-size: 34px; }
+    Text { x: 0px; y: 0px; visible: false; text: "0123456789.,:;!?()[]%-_/'\" ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúçñ¿¡…"; font-size: 24px; }
+}
