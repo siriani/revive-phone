@@ -711,7 +711,14 @@ fn tg_cmd(c: telegram::Cmd) {
 }
 
 fn bolha(m: &telegram::Msg) -> Bolha {
-    Bolha { texto: ss(m.texto.clone()), minha: m.minha, hora: ss(m.hora.clone()) }
+    Bolha {
+        texto: ss(m.texto.clone()),
+        minha: m.minha,
+        hora: ss(m.hora.clone()),
+        midia: m.midia,
+        video: m.video,
+        foto: Image::default(),
+    }
 }
 
 /// Mostra o passo de login (ou a lista, se já está logado).
@@ -807,11 +814,25 @@ fn tg_evento(ui: &AppWindow, ev: telegram::Evento) {
             ui.set_tg_bolhas(ModelRc::from(m));
             ui.set_tela(ss("tg-chat"));
         }
-        telegram::Evento::Nova(da_aberta, nome, m) => {
+        telegram::Evento::Foto(i, buf) => {
+            TG_BOLHAS.with_borrow(|b| {
+                if let Some(b) = b {
+                    if let Some(mut x) = b.row_data(i) {
+                        x.foto = Image::from_rgba8(buf);
+                        b.set_row_data(i, x);
+                    }
+                }
+            });
+        }
+        telegram::Evento::Nova(da_aberta, nome, m, foto) => {
             if da_aberta && (tela == "tg-chat" || tela == "teclado") {
                 TG_BOLHAS.with_borrow(|b| {
                     if let Some(b) = b {
-                        b.push(bolha(&m));
+                        let mut x = bolha(&m);
+                        if let Some(f) = foto {
+                            x.foto = Image::from_rgba8(f);
+                        }
+                        b.push(x);
                     }
                 });
             } else if !m.minha {

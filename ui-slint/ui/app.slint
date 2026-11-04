@@ -559,7 +559,7 @@ component MusicaAlbum inherits Rectangle {
 
 // ---------------------------------------------------------------- telegram
 
-export struct Bolha { texto: string, minha: bool, hora: string }
+export struct Bolha { texto: string, minha: bool, hora: string, midia: bool, video: bool, foto: image }
 
 export struct TgConversa { nome: string, previa: string, hora: string, nao-lidas: int, iniciais: string, cor: color }
 
@@ -666,8 +666,22 @@ component TelaTgChat inherits Rectangle {
                     background: b.minha ? Tema.destaque : Tema.superficie-alta;
                     VerticalLayout {
                         padding: 16px;
-                        spacing: 4px;
-                        Text { text: b.texto; wrap: word-wrap; font-size: Tema.texto-corpo;
+                        spacing: 8px;
+                        // foto ou miniatura do vídeo (cinza enquanto baixa), na proporção certa
+                        if b.midia: Rectangle {
+                            width: 560px;
+                            height: b.foto.width > 0 ? 560px * b.foto.height / b.foto.width : 315px;
+                            border-radius: 14px;
+                            clip: true;
+                            background: Tema.superficie-baixa;
+                            Image { width: parent.width; height: parent.height; source: b.foto; image-fit: cover; }
+                            if b.video: Rectangle {
+                                width: 88px; height: 88px; border-radius: 44px; background: #000000a0;
+                                Image { width: 52px; height: 52px; source: @image-url("icones/play_arrow.svg");
+                                        colorize: Colors.white; }
+                            }
+                        }
+                        if b.texto != "": Text { text: b.texto; wrap: word-wrap; font-size: Tema.texto-corpo;
                                color: b.minha ? Tema.sobre-destaque : Tema.texto; }
                         Text { text: b.hora; font-size: Tema.texto-corpo; horizontal-alignment: right;
                                color: b.minha ? Tema.sobre-destaque.with-alpha(0.7) : Tema.texto-sec; }
@@ -1083,9 +1097,13 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.aviso != "": Text {
-        y: parent.height - 45px; width: parent.width; text: root.aviso; font-size: 26px;
-        color: Cores.apagado; horizontal-alignment: center;
+    // aviso flutuante no topo (estilo snackbar do Material), sem cobrir botões de baixo
+    if root.aviso != "": Rectangle {
+        x: (parent.width - self.width) / 2; y: 104px; height: 64px;
+        width: min(parent.width - 80px, txt-aviso.preferred-width + 64px);
+        border-radius: 32px; background: Tema.superficie-alta; border-width: 1px; border-color: Tema.contorno;
+        txt-aviso := Text { text: root.aviso; font-size: 26px; color: Tema.texto; overflow: elide;
+                            width: parent.width - 48px; horizontal-alignment: center; }
     }
     if root.prompt-codigo != "": Prompt {
         width: 1280px; height: 720px; codigo: root.prompt-codigo; texto: root.prompt-texto;

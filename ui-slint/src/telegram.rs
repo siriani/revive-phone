@@ -1,23 +1,26 @@
-//! Telegram (MTProto em Rust puro, crate grammers): login, conversas, mensagens e
-//! novidades em tempo real. Roda numa thread própria com tokio; a interface manda
-//! comandos (`Cmd`) e recebe eventos (`Evento`).
+//! Telegram (MTProto em Rust puro, crate grammers): login, conversas, mensagens,
+//! fotos e novidades em tempo real. Roda numa thread própria com tokio; a interface
+//! manda comandos (`Cmd`) e recebe eventos (`Evento`).
 //!
 //! api_id/api_hash ficam em /etc/revive/telegram.conf; a sessão (login) em
-//! /var/lib/revive/telegram.session. Os dois só o root lê.
+//! /var/lib/revive/telegram.session. Os dois só o root lê. Fotos baixadas ficam em
+//! /var/cache/revive/tg.
 
 use std::sync::Arc;
 
-use grammers_client::{Client, SignInError};
-use grammers_client::client::LoginToken;
-use grammers_client::client::PasswordToken;
-use grammers_client::update::Update;
+use grammers_client::client::{LoginToken, PasswordToken};
+use grammers_client::media::Media;
+use grammers_client::message::Message;
 use grammers_client::session::types::PeerRef;
+use grammers_client::update::Update;
+use grammers_client::{Client, SignInError};
 use grammers_mtsender::SenderPool;
 use grammers_session::storages::SqliteSession;
 use tokio::sync::mpsc;
 
 const CONF: &str = "/etc/revive/telegram.conf";
 const SESSAO: &str = "/var/lib/revive/telegram.session";
+const CACHE: &str = "/var/cache/revive/tg";
 
 pub enum Cmd {
     Telefone(String),
@@ -41,7 +44,13 @@ pub struct Msg {
     pub texto: String,
     pub minha: bool,
     pub hora: String,
+    /// tem foto ou vídeo (a imagem chega depois, num Evento::Foto)
+    pub midia: bool,
+    pub video: bool,
 }
+
+/// Imagem já decodificada e reduzida (pronta para a tela).
+pub type Imagem = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
 pub enum Evento {
     /// "sem-conf", "telefone", "codigo", "senha", "pronto" ou "erro: ..."
@@ -49,8 +58,10 @@ pub enum Evento {
     Conversas(Vec<Conversa>),
     /// conversa aberta: nome e últimas mensagens (mais antigas primeiro)
     Chat(String, Vec<Msg>),
-    /// mensagem nova: (é da conversa aberta?, nome de quem mandou/conversa, mensagem)
-    Nova(bool, String, Msg),
+    /// mensagem nova: (é da conversa aberta?, nome de quem mandou, mensagem, foto)
+    Nova(bool, String, Msg, Option<Imagem>),
+    /// foto/miniatura da mensagem `i` da conversa aberta
+    Foto(usize, Imagem),
 }
 
 fn ler_conf() -> Option<(i32, String)> {
@@ -67,20 +78,66 @@ fn ler_conf() -> Option<(i32, String)> {
     Some((id?, hash?))
 }
 
-fn hora(m: &grammers_client::message::Message) -> String {
+fn hora(m: &Message) -> String {
     let ts = m.date().as_second();
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string())
         .unwrap_or_default()
 }
 
-fn msg(m: &grammers_client::message::Message) -> Msg {
-    let t = m.text();
-    Msg {
-        texto: if t.is_empty() { "[mídia]".into() } else { t.to_string() },
-        minha: m.outgoing(),
-        hora: hora(m),
-    }
+fn msg(m: &Message) -> Msg {
+    let t = m.text().to_string();
+    let (midia, video, rotulo): (bool, bool, String) = match m.media() {
+        Some(Media::Photo(_)) => (true, false, String::new()),
+        Some(Media::Document(d)) => match d.mime_type() {
+            Some(t) if t.starts_with("video/") => (true, true, String::new()),
+            Some(t) if t.starts_with("audio/") => (false, false, "♪ áudio".into()),
+            _ => (false, false, format!("arquivo: {}", d.name().unwrap_or("?"))),
+        },
+        Some(Media::Sticker(_)) => (false, false, "figurinha".into()),
+        Some(_) => (false, false, "[mídia]".into()),
+        None => (false, false, String::new()),
+    };
+    let texto = if t.is_empty() { rotulo } else { t };
+    Msg { texto, minha: m.outgoing(), hora: hora(m), midia, video }
+}
+
+/// Foto (versão média, ~800 px) ou miniatura do vídeo, com cache em disco, reduzida
+/// para caber no balão.
+async fn imagem(client: &Client, m: &Message) -> Option<Imagem> {
+    let arq = format!("{CACHE}/{}_{}.jpg", m.peer_id().bot_api_dialog_id().unwrap_or(0), m.id());
+    let bytes = match std::fs::read(&arq) {
+        Ok(b) => b,
+        Err(_) => {
+            let thumbs = match m.media()? {
+                Media::Photo(p) => p.thumbs(),
+                Media::Document(d) => d.thumbs(),
+                _ => return None,
+            };
+            // a maior versão de até ~200 KB (fotos: ~800 px; vídeos: a miniatura)
+            let alvo = thumbs
+                .iter()
+                .filter(|t| t.size() > 0 && t.size() < 200_000)
+                .max_by_key(|t| t.size())
+                .or_else(|| thumbs.iter().max_by_key(|t| t.size()))?
+                .clone();
+            let mut it = client.iter_download(&alvo);
+            let mut b = vec![];
+            while let Ok(Some(parte)) = it.next().await {
+                b.extend(parte);
+            }
+            if b.is_empty() {
+                return None;
+            }
+            let _ = std::fs::create_dir_all(CACHE);
+            let _ = std::fs::write(&arq, &b);
+            b
+        }
+    };
+    let img = image::load_from_memory(&bytes).ok()?;
+    let img = img.resize(560, 420, image::imageops::FilterType::Triangle).to_rgba8();
+    let (w, h) = img.dimensions();
+    Some(slint::SharedPixelBuffer::clone_from_slice(img.as_raw(), w, h))
 }
 
 /// Liga o Telegram numa thread nova. `avisar` recebe os eventos (de outra thread).
@@ -137,11 +194,19 @@ async fn rodar<F: Fn(Evento)>(mut rx: mpsc::UnboundedReceiver<Cmd>, avisar: F) {
                 c = rx.recv() => c,
                 u = s.next() => {
                     if let Ok(Update::NewMessage(m)) = u {
-                        let nome = m.sender().and_then(|p| p.name()).unwrap_or("?").to_string();
+                        // canais não têm remetente pessoal: usa o nome do canal/grupo
+                        let nome = m
+                            .sender()
+                            .and_then(|p| p.name())
+                            .or_else(|| m.peer().and_then(|p| p.name()))
+                            .unwrap_or("Telegram")
+                            .to_string();
                         let da_aberta = aberta
                             .and_then(|i| conversas.get(i))
                             .is_some_and(|(p, _)| m.peer().is_some_and(|mp| mp.id() == p.id));
-                        avisar(Evento::Nova(da_aberta, nome, msg(&m)));
+                        let dados = msg(&m);
+                        let foto = if da_aberta && dados.midia { imagem(&client, &m).await } else { None };
+                        avisar(Evento::Nova(da_aberta, nome, dados, foto));
                     }
                     continue;
                 }
@@ -184,17 +249,28 @@ async fn rodar<F: Fn(Evento)>(mut rx: mpsc::UnboundedReceiver<Cmd>, avisar: F) {
                 let Some((peer, nome)) = conversas.get(i).cloned() else { continue };
                 aberta = Some(i);
                 let mut it = client.iter_messages(peer).limit(40);
-                let mut v = vec![];
+                let mut mensagens = vec![];
                 while let Ok(Some(m)) = it.next().await {
-                    v.push(msg(&m));
+                    mensagens.push(m);
                 }
-                v.reverse();
-                avisar(Evento::Chat(nome, v));
+                mensagens.reverse();
+                avisar(Evento::Chat(nome, mensagens.iter().map(msg).collect()));
+                // fotos uma a uma, da mais nova para a mais antiga; para se chegar outro comando
+                for (i, m) in mensagens.iter().enumerate().rev() {
+                    if !rx.is_empty() {
+                        break;
+                    }
+                    if msg(m).midia {
+                        if let Some(img) = imagem(&client, m).await {
+                            avisar(Evento::Foto(i, img));
+                        }
+                    }
+                }
             }
             Cmd::Enviar(texto) => {
                 let Some((peer, _)) = aberta.and_then(|i| conversas.get(i)).map(|x| x.clone()) else { continue };
                 match client.send_message(peer, texto.as_str()).await {
-                    Ok(m) => avisar(Evento::Nova(true, "eu".into(), msg(&m))),
+                    Ok(m) => avisar(Evento::Nova(true, "eu".into(), msg(&m), None)),
                     Err(e) => avisar(Evento::Estado(format!("erro: {e}"))),
                 }
             }
