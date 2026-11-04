@@ -418,6 +418,138 @@ component TelaTocando inherits Rectangle {
             clicado => { root.ir("musica"); } }
 }
 
+// --------------------------------------------- música no estilo Spotify
+
+export struct Album { id: string, nome: string, artista: string, capa: image }
+export struct Faixa { titulo: string, sub: string }
+
+// "Tocando agora" fixo embaixo das telas de música
+component BarraTocando inherits Rectangle {
+    in property <bool> ativo;
+    in property <string> titulo;
+    in property <string> artista;
+    in property <image> capa;
+    in property <bool> pausa;
+    callback controle(string);
+    callback abrir();
+    x: 0; y: 640px; width: 1280px; height: 80px;
+    background: #161b22;
+    if !root.ativo: Text { x: 30px; height: 80px; vertical-alignment: center; text: "nada tocando";
+                           font-size: 26px; color: Cores.apagado; }
+    if root.ativo: Rectangle {
+        x: 0; y: 0; width: 900px; height: 80px;
+        Rectangle { x: 10px; y: 8px; width: 64px; height: 64px; border-radius: 8px; background: Cores.cartao;
+                    Image { width: 64px; height: 64px; source: root.capa; image-fit: cover; } }
+        Text { x: 90px; y: 8px; width: 800px; text: root.titulo; font-size: 26px; font-family: "DejaVu Sans Bold";
+               color: Cores.texto; overflow: elide; }
+        Text { x: 90px; y: 42px; width: 800px; text: root.artista; font-size: 26px; color: Cores.apagado;
+               overflow: elide; }
+        TouchArea { clicked => { root.abrir(); } }
+    }
+    if root.ativo: Botao { x: 940px; y: 8px; width: 100px; height: 64px; texto: "◀◀"; fonte: 26px;
+                           clicado => { root.controle("anterior"); } }
+    if root.ativo: Botao { x: 1055px; y: 8px; width: 100px; height: 64px; texto: root.pausa ? "▶" : "❚❚";
+                           cor: #286e46; clicado => { root.controle("pausar"); } }
+    if root.ativo: Botao { x: 1170px; y: 8px; width: 100px; height: 64px; texto: "▶▶"; fonte: 26px;
+                           clicado => { root.controle("proxima"); } }
+}
+
+// uma fileira de capas que rola para os lados
+component FileiraAlbuns inherits Rectangle {
+    in property <string> titulo;
+    in property <[Album]> albuns;
+    callback abrir(int);
+    height: 300px;
+    Text { x: 0; y: 0; text: root.titulo; font-size: 34px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
+    Flickable {
+        x: 0; y: 48px; width: parent.width; height: 252px;
+        viewport-width: max(parent.width, root.albuns.length * 190px);
+        for a[i] in root.albuns: Rectangle {
+            x: i * 190px; width: 175px; height: 250px;
+            Rectangle { x: 0; y: 0; width: 175px; height: 175px; border-radius: 10px; background: Cores.cartao;
+                        Text { text: "♫"; font-size: 44px; color: Cores.apagado; }
+                        Image { width: 175px; height: 175px; source: a.capa; image-fit: cover; } }
+            if toque.pressed: Rectangle { x: 0; y: 0; width: 175px; height: 175px; border-radius: 10px;
+                                          background: #ffffff40; }
+            Text { y: 182px; width: 175px; text: a.nome; font-size: 26px; color: Cores.texto; overflow: elide; }
+            Text { y: 214px; width: 175px; text: a.artista; font-size: 26px; color: Cores.apagado; overflow: elide; }
+            toque := TouchArea { clicked => { root.abrir(i); } }
+        }
+    }
+}
+
+component MusicaInicio inherits Rectangle {
+    in property <[Album]> recentes;
+    in property <[Album]> frequentes;
+    in property <[Album]> novidades;
+    in property <[Album]> aleatorios;
+    in property <string> mensagem;
+    callback abrir-album(string, int);
+    callback navegar(string);
+    // barra lateral (x/y explícitos: no Slint, sem eles o elemento fica centralizado no pai)
+    Rectangle {
+        x: 0; y: 0; width: 210px; height: 640px; background: #0a0d11;
+        property <[{t: string, k: string}]> itens: [
+            {t: "Início", k: "home"}, {t: "Buscar", k: "buscar"}, {t: "Artistas", k: "artistas"},
+            {t: "Playlists", k: "playlists"}, {t: "Aleatórias", k: "aleatorias"}, {t: "⚙ Ajustes", k: "ajustes"},
+            {t: "◀ Revive", k: "revive"}
+        ];
+        for n[i] in self.itens: Botao { x: 12px; y: 14px + i * 87px; width: 186px; height: 74px; texto: n.t;
+                                        fonte: 26px; cor: #0a0d11; clicado => { root.navegar(n.k); } }
+    }
+    if root.mensagem != "": Text { x: 210px; y: 280px; width: 1070px; text: root.mensagem; font-size: 34px;
+                                   color: Cores.apagado; horizontal-alignment: center; }
+    Flickable {
+        x: 230px; y: 0; width: 1050px; height: 640px;
+        viewport-height: 4 * 310px + 20px;
+        FileiraAlbuns { y: 20px; width: 1040px; titulo: "Tocados recentemente"; albuns: root.recentes;
+                        abrir(i) => { root.abrir-album("recentes", i); } }
+        FileiraAlbuns { y: 330px; width: 1040px; titulo: "Mais tocados"; albuns: root.frequentes;
+                        abrir(i) => { root.abrir-album("frequentes", i); } }
+        FileiraAlbuns { y: 640px; width: 1040px; titulo: "Novidades"; albuns: root.novidades;
+                        abrir(i) => { root.abrir-album("novidades", i); } }
+        FileiraAlbuns { y: 950px; width: 1040px; titulo: "Para descobrir"; albuns: root.aleatorios;
+                        abrir(i) => { root.abrir-album("aleatorios", i); } }
+    }
+}
+
+component MusicaAlbum inherits Rectangle {
+    in property <image> capa;
+    in property <string> titulo;
+    in property <string> artista;
+    in property <string> info;
+    in property <[Faixa]> faixas;
+    callback tocar(int);
+    callback aleatorio();
+    callback voltar();
+    Rectangle { x: 30px; y: 20px; width: 260px; height: 260px; border-radius: 14px; background: Cores.cartao;
+                Text { text: "♫"; font-size: 96px; color: Cores.apagado; }
+                Image { width: 260px; height: 260px; source: root.capa; image-fit: cover; } }
+    Text { x: 30px; y: 290px; width: 300px; text: root.titulo; font-size: 34px; font-family: "DejaVu Sans Bold";
+           color: Cores.texto; overflow: elide; }
+    Text { x: 30px; y: 336px; width: 300px; text: root.artista; font-size: 26px; color: Cores.apagado; overflow: elide; }
+    Text { x: 30px; y: 372px; width: 300px; text: root.info; font-size: 26px; color: Cores.apagado; overflow: elide; }
+    Botao { x: 30px; y: 420px; width: 300px; height: 64px; texto: "▶ Tocar"; cor: #286e46;
+            clicado => { root.tocar(0); } }
+    Botao { x: 30px; y: 495px; width: 300px; height: 60px; texto: "Aleatório"; fonte: 26px;
+            clicado => { root.aleatorio(); } }
+    Botao { x: 30px; y: 566px; width: 300px; height: 60px; texto: "◀ Voltar"; fonte: 26px;
+            clicado => { root.voltar(); } }
+    if root.faixas.length == 0: Text { x: 360px; y: 280px; width: 900px; text: "carregando...";
+                                       font-size: 34px; color: Cores.apagado; horizontal-alignment: center; }
+    Flickable {
+        x: 360px; y: 20px; width: 900px; height: 610px;
+        viewport-height: root.faixas.length * 72px;
+        for f[i] in root.faixas: Rectangle {
+            y: i * 72px; width: 900px; height: 66px; border-radius: 12px;
+            background: toque.pressed ? Cores.cartao.brighter(40%) : Cores.cartao;
+            Text { x: 20px; y: 4px; width: 860px; text: f.titulo; font-size: 26px; color: Cores.texto; overflow: elide; }
+            Text { x: 20px; y: 34px; width: 860px; text: f.sub; font-size: 26px; color: Cores.apagado; overflow: elide; }
+            toque := TouchArea { clicked => { root.tocar(i); } }
+        }
+    }
+}
+
 // ------------------------------------------------- configuração do Navidrome
 
 component TelaConfMusica inherits Rectangle {
@@ -571,6 +703,20 @@ export component AppWindow inherits Window {
     in property <string> cripto-mensagem;
     in property <string> cripto-moeda;
     callback cripto-trocar-moeda();
+    in property <[Album]> mus-recentes;
+    in property <[Album]> mus-frequentes;
+    in property <[Album]> mus-novidades;
+    in property <[Album]> mus-aleatorios;
+    in property <string> mus-mensagem;
+    in property <image> album-capa;
+    in property <string> album-titulo;
+    in property <string> album-artista;
+    in property <string> album-info;
+    in property <[Faixa]> album-faixas;
+    callback mus-abrir-album(string, int);
+    callback mus-navegar(string);
+    callback album-tocar(int);
+    callback album-aleatorio();
     in property <string> conf-url;
     in property <string> conf-usuario;
     in property <string> conf-senha;
@@ -719,7 +865,27 @@ export component AppWindow inherits Window {
             procurar => { root.bt-procurar(); }
             voltar => { root.ir("inicio"); }
         }
-        if root.tela == "musica": TelaMusica {
+        if root.tela == "musica": MusicaInicio {
+            width: 1280px; height: 720px;
+            recentes: root.mus-recentes; frequentes: root.mus-frequentes; novidades: root.mus-novidades;
+            aleatorios: root.mus-aleatorios; mensagem: root.mus-mensagem;
+            abrir-album(l, i) => { root.mus-abrir-album(l, i); }
+            navegar(k) => { root.mus-navegar(k); }
+        }
+        if root.tela == "album": MusicaAlbum {
+            width: 1280px; height: 720px; capa: root.album-capa; titulo: root.album-titulo;
+            artista: root.album-artista; info: root.album-info; faixas: root.album-faixas;
+            tocar(i) => { root.album-tocar(i); }
+            aleatorio => { root.album-aleatorio(); }
+            voltar => { root.ir("musica"); }
+        }
+        if root.tela == "musica" || root.tela == "album": BarraTocando {
+            ativo: root.toc-ativo; titulo: root.toc-titulo; artista: root.toc-artista; capa: root.toc-capa;
+            pausa: root.toc-pausa;
+            controle(c) => { root.controle(c); }
+            abrir => { root.ir("tocando"); }
+        }
+        if root.tela == "musica-menu": TelaMusica {
             width: 1280px; height: 720px; tem-tocando: root.toc-ativo; configurado: root.musica-configurada;
             abrir(c) => { root.musica-abrir(c); }
             voltar => { root.ir("inicio"); }

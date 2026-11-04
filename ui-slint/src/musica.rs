@@ -193,6 +193,32 @@ impl Subsonic {
             .read_to_vec()
             .map_err(|e| e.to_string())
     }
+    /// Capa reduzida e guardada em disco (/var/cache/revive/capas/<id>-<tamanho>.jpg):
+    /// a segunda vez abre sem rede. Devolve RGBA pronto para a tela.
+    pub fn capa_cache(&self, id: &str, tamanho: u32) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
+        let dir = "/var/cache/revive/capas";
+        let nome: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+        let arq = format!("{dir}/{nome}-{tamanho}.jpg");
+        let bytes = match std::fs::read(&arq) {
+            Ok(b) => b,
+            Err(_) => {
+                let b = self.capa(id, tamanho).ok()?;
+                let _ = std::fs::create_dir_all(dir);
+                let _ = std::fs::write(format!("{arq}.tmp"), &b).and_then(|_| std::fs::rename(format!("{arq}.tmp"), &arq));
+                b
+            }
+        };
+        let img = image::load_from_memory(&bytes).ok()?;
+        let img = if img.width() > tamanho || img.height() > tamanho {
+            img.resize(tamanho, tamanho, image::imageops::FilterType::Triangle)
+        } else {
+            img
+        }
+        .to_rgba8();
+        let (w, h) = img.dimensions();
+        Some(slint::SharedPixelBuffer::clone_from_slice(img.as_raw(), w, h))
+    }
+
     pub fn scrobble(&self, id: &str, terminou: bool) {
         let _ = self.get("scrobble", &[("id", id), ("submission", if terminou { "true" } else { "false" })]);
     }

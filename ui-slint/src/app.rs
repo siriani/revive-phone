@@ -8,12 +8,13 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use serde_json::Value;
-use slint::{Color, ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{AppInfo, AppWindow, Aparelho, Item, Moeda, Rede, Tecla, Vela};
+use crate::{Album, AppInfo, AppWindow, Aparelho, Faixa, Item, Moeda, Rede, Tecla, Vela};
+use std::rc::Rc;
 use crate::cripto;
 
 const POR_PAGINA: usize = 8;
@@ -84,6 +85,10 @@ struct Estado {
 }
 
 thread_local! {
+    /// fileiras da tela de música: nome -> (modelo na tela, álbuns do Navidrome)
+    static FILEIRAS: RefCell<std::collections::HashMap<String, (Rc<VecModel<Album>>, Vec<Value>)>> = RefCell::default();
+    /// faixas do álbum aberto
+    static FAIXAS_ALBUM: RefCell<Vec<Value>> = RefCell::default();
     /// ícones das moedas já baixados (url -> imagem)
     static ICONES: RefCell<std::collections::HashMap<String, Image>> = RefCell::default();
     static EST: RefCell<Estado> = RefCell::new(Estado {
@@ -504,6 +509,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     if tela == "musica-conf" {
         abrir_conf(ui);
     }
+    if tela == "musica" && FILEIRAS.with_borrow(|f| f.is_empty()) {
+        carregar_musica(ui);
+    }
     ui.set_tela(ss(tela));
     match tela {
         "wifi" => procurar_redes(ui),
@@ -513,6 +521,121 @@ fn ir(ui: &AppWindow, tela: &str) {
             }
         }
         _ => {}
+    }
+}
+
+// --------------------------------------------- música no estilo Spotify
+
+const FILAS: [(&str, &str); 4] =
+    [("recentes", "recent"), ("frequentes", "frequent"), ("novidades", "newest"), ("aleatorios", "random")];
+
+fn album_slint(a: &Value) -> Album {
+    Album {
+        id: ss(a["id"].as_str().unwrap_or("")),
+        nome: ss(a["name"].as_str().unwrap_or("?")),
+        artista: ss(a["artist"].as_str().unwrap_or("")),
+        capa: Image::default(),
+    }
+}
+
+fn mostrar_fileira(ui: &AppWindow, fila: &str, m: Rc<VecModel<Album>>) {
+    let r = ModelRc::from(m);
+    match fila {
+        "recentes" => ui.set_mus_recentes(r),
+        "frequentes" => ui.set_mus_frequentes(r),
+        "novidades" => ui.set_mus_novidades(r),
+        _ => ui.set_mus_aleatorios(r),
+    }
+}
+
+/// Início da música: 4 fileiras de álbuns; as capas chegam uma a uma (cache em disco).
+fn carregar_musica(ui: &AppWindow) {
+    if !api().configurado() {
+        ui.set_mus_mensagem(ss("Configure o Navidrome em ⚙ Ajustes"));
+        return;
+    }
+    ui.set_mus_mensagem(ss(""));
+    FILEIRAS.with_borrow_mut(|f| f.clear());
+    for (fila, tipo) in FILAS {
+        let fraca = ui.as_weak();
+        std::thread::spawn(move || {
+            let Ok(albuns) = api().lista_albuns(tipo) else { return };
+            let capas: Vec<String> = albuns.iter().map(|a| a["coverArt"].as_str().unwrap_or("").to_string()).collect();
+            let fraca2 = fraca.clone();
+            let _ = fraca.upgrade_in_event_loop(move |ui| {
+                let m = Rc::new(VecModel::from(albuns.iter().map(album_slint).collect::<Vec<_>>()));
+                FILEIRAS.with_borrow_mut(|f| f.insert(fila.to_string(), (m.clone(), albuns)));
+                mostrar_fileira(&ui, fila, m);
+            });
+            // capas em sequência, nesta mesma thread
+            for (i, id) in capas.into_iter().enumerate() {
+                if id.is_empty() {
+                    continue;
+                }
+                let Some(buf) = api().capa_cache(&id, 180) else { continue };
+                let _ = fraca2.upgrade_in_event_loop(move |_| {
+                    FILEIRAS.with_borrow(|f| {
+                        if let Some((m, _)) = f.get(fila) {
+                            if let Some(mut a) = m.row_data(i) {
+                                a.capa = Image::from_rgba8(buf);
+                                m.set_row_data(i, a);
+                            }
+                        }
+                    })
+                });
+            }
+        });
+    }
+}
+
+fn abrir_album_pagina(ui: &AppWindow, album: Value) {
+    let ano = album["year"].as_i64().map(|y| y.to_string()).unwrap_or_default();
+    ui.set_album_titulo(ss(album["name"].as_str().unwrap_or("?")));
+    ui.set_album_artista(ss(album["artist"].as_str().unwrap_or("")));
+    ui.set_album_info(ss(ano));
+    ui.set_album_capa(Image::default());
+    ui.set_album_faixas(ModelRc::new(VecModel::from(Vec::<Faixa>::new())));
+    FAIXAS_ALBUM.with_borrow_mut(|f| f.clear());
+    ui.set_tela(ss("album"));
+    let id = album["id"].as_str().unwrap_or("").to_string();
+    let capa = album["coverArt"].as_str().unwrap_or("").to_string();
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let faixas = api().album(&id).unwrap_or_default();
+        let buf = if capa.is_empty() { None } else { api().capa_cache(&capa, 300) };
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            if ui.get_tela() != "album" {
+                return;
+            }
+            let v: Vec<Faixa> = faixas
+                .iter()
+                .enumerate()
+                .map(|(i, f)| Faixa {
+                    titulo: ss(format!("{}. {}", f["track"].as_i64().unwrap_or(i as i64 + 1), f["title"].as_str().unwrap_or("?"))),
+                    sub: ss(format!("{} · {}", f["artist"].as_str().unwrap_or(""), musica::mmss(f["duration"].as_f64().unwrap_or(0.0)))),
+                })
+                .collect();
+            let n = v.len();
+            ui.set_album_faixas(ModelRc::new(VecModel::from(v)));
+            let info = ui.get_album_info();
+            ui.set_album_info(ss(if info.is_empty() { format!("{n} faixas") } else { format!("{info} · {n} faixas") }));
+            if let Some(b) = buf {
+                ui.set_album_capa(Image::from_rgba8(b));
+            }
+            FAIXAS_ALBUM.with_borrow_mut(|f| *f = faixas);
+        });
+    });
+}
+
+fn mus_navegar(ui: &AppWindow, k: &str) {
+    match k {
+        "home" => carregar_musica(ui),
+        "buscar" => musica_abrir(ui, "buscar"),
+        "artistas" => musica_abrir(ui, "artistas"),
+        "playlists" => musica_abrir(ui, "playlists"),
+        "aleatorias" => musica_abrir(ui, "aleatorias"),
+        "ajustes" => ir(ui, "musica-conf"),
+        _ => ir(ui, "inicio"),
     }
 }
 
@@ -940,6 +1063,32 @@ pub fn ligar(ui: &AppWindow) {
     ui.on_cripto_abrir(move |id, nome| {
         if let Some(ui) = f.upgrade() {
             abrir_grafico(&ui, id.to_string(), nome.to_string());
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_mus_abrir_album(move |fila, i| {
+        if let Some(ui) = f.upgrade() {
+            let a = FILEIRAS.with_borrow(|m| m.get(fila.as_str()).and_then(|(_, v)| v.get(i as usize).cloned()));
+            if let Some(a) = a {
+                abrir_album_pagina(&ui, a);
+            }
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_mus_navegar(move |k| f.upgrade().iter().for_each(|ui| mus_navegar(ui, &k)));
+    let f = ui.as_weak();
+    ui.on_album_tocar(move |i| {
+        if let Some(ui) = f.upgrade() {
+            let faixas = FAIXAS_ALBUM.with_borrow(|v| v.clone());
+            tocar(&ui, faixas, i.max(0) as usize);
+        }
+    });
+    let f = ui.as_weak();
+    ui.on_album_aleatorio(move || {
+        if let Some(ui) = f.upgrade() {
+            let mut faixas = FAIXAS_ALBUM.with_borrow(|v| v.clone());
+            embaralhar(&mut faixas);
+            tocar(&ui, faixas, 0);
         }
     });
     let f = ui.as_weak();
