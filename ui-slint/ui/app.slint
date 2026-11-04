@@ -1,20 +1,27 @@
 import "fontes/DejaVuSans.ttf";
 import "fontes/DejaVuSansBold-Familia.ttf";
+import { Tema } from "tema.slint";
+export { Tema }
+import { Palette } from "std-widgets.slint";
+import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
+         MaterialTypography } from "@material";
 
 // Revive: telas da interface (Slint). Paisagem 1280x720, desenhada pelo
 // renderizador por software direto no framebuffer, só nas áreas que mudam.
 
+// Nomes antigos das cores, agora ligados à central de tema (tema.slint): as telas que
+// ainda usam Cores.* mudam junto com o tema claro/escuro.
 export global Cores {
-    out property <color> fundo: #0e1116;
-    out property <color> cartao: #1c212a;
-    out property <color> texto: #ebeef2;
-    out property <color> apagado: #8c96a5;
-    out property <color> destaque: #f7931a;  // laranja do bitcoin
-    out property <color> bom: #50c878;
-    out property <color> ruim: #eb5a5a;
-    out property <color> tecla: #2d3440;
-    out property <color> musica: #283c5a;
-    out property <color> btc-botao: #46371e;
+    out property <color> fundo: Tema.fundo;
+    out property <color> cartao: Tema.superficie;
+    out property <color> texto: Tema.texto;
+    out property <color> apagado: Tema.texto-sec;
+    out property <color> destaque: Tema.aviso;  // laranja do bitcoin
+    out property <color> bom: Tema.sucesso;
+    out property <color> ruim: Tema.erro;
+    out property <color> tecla: Tema.superficie-alta;
+    out property <color> musica: Tema.destaque-suave;
+    out property <color> btc-botao: Tema.escuro ? #46371e : #f3e2c4;
 }
 
 export component Botao inherits Rectangle {
@@ -463,7 +470,7 @@ component FileiraAlbuns inherits Rectangle {
     Text { x: 0; y: 0; text: root.titulo; font-size: 34px; font-family: "DejaVu Sans Bold"; color: Cores.texto; }
     Flickable {
         x: 0; y: 48px; width: parent.width; height: 252px;
-        viewport-width: max(parent.width, root.albuns.length * 190px);
+        content-width: max(parent.width, root.albuns.length * 190px);
         for a[i] in root.albuns: Rectangle {
             x: i * 190px; width: 175px; height: 250px;
             Rectangle { x: 0; y: 0; width: 175px; height: 175px; border-radius: 10px; background: Cores.cartao;
@@ -501,7 +508,7 @@ component MusicaInicio inherits Rectangle {
                                    color: Cores.apagado; horizontal-alignment: center; }
     Flickable {
         x: 230px; y: 0; width: 1050px; height: 640px;
-        viewport-height: 4 * 310px + 20px;
+        content-height: 4 * 310px + 20px;
         FileiraAlbuns { y: 20px; width: 1040px; titulo: "Tocados recentemente"; albuns: root.recentes;
                         abrir(i) => { root.abrir-album("recentes", i); } }
         FileiraAlbuns { y: 330px; width: 1040px; titulo: "Mais tocados"; albuns: root.frequentes;
@@ -539,7 +546,7 @@ component MusicaAlbum inherits Rectangle {
                                        font-size: 34px; color: Cores.apagado; horizontal-alignment: center; }
     Flickable {
         x: 360px; y: 20px; width: 900px; height: 610px;
-        viewport-height: root.faixas.length * 72px;
+        content-height: root.faixas.length * 72px;
         for f[i] in root.faixas: Rectangle {
             y: i * 72px; width: 900px; height: 66px; border-radius: 12px;
             background: toque.pressed ? Cores.cartao.brighter(40%) : Cores.cartao;
@@ -554,16 +561,80 @@ component MusicaAlbum inherits Rectangle {
 
 export struct Bolha { texto: string, minha: bool, hora: string }
 
+export struct TgConversa { nome: string, previa: string, hora: string, nao-lidas: int, iniciais: string, cor: color }
+
+// Telegram com a biblioteca Material 3 (AppBar, Avatar, Badge, FilledButton, cartões)
 component TelaTgLogin inherits Rectangle {
     in property <string> mensagem;
     in property <string> botao;
     callback digitar();
     callback voltar();
-    Titulo { text: "Telegram"; }
-    Text { x: 80px; y: 150px; width: 1120px; height: 300px; text: root.mensagem; font-size: 34px;
-           color: Cores.texto; wrap: word-wrap; horizontal-alignment: center; }
-    Rodape { width: parent.width; direita: root.botao; clicou-esquerda => { root.voltar(); }
-             clicou-direita => { root.digitar(); } }
+    background: Tema.fundo;
+    AppBar {
+        x: 0; y: 0; width: parent.width;
+        title: "Telegram";
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+    FilledCard {
+        x: 240px; y: 150px; width: 800px; height: 430px;
+        Image { x: 340px; y: 40px; width: 120px; height: 120px; source: @image-url("icones/chat.svg");
+                colorize: Tema.destaque; }
+        Text { x: 40px; y: 185px; width: 720px; height: 130px; text: root.mensagem; wrap: word-wrap;
+               horizontal-alignment: center; font-size: Tema.texto-titulo; color: Tema.texto; }
+        if root.botao != "": FilledButton {
+            x: 250px; y: 330px; width: 300px; height: 72px; text: root.botao;
+            icon: @image-url("icones/edit.svg");
+            clicked => { root.digitar(); }
+        }
+    }
+}
+
+component TelaTgConversas inherits Rectangle {
+    in property <[TgConversa]> conversas;
+    in property <string> mensagem;
+    callback abrir(int);
+    callback voltar();
+    callback atualizar();
+    background: Tema.fundo;
+    barra := AppBar {
+        x: 0; y: 0; width: parent.width;
+        title: "Telegram";
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        trailing_button: { icon: @image-url("icones/refresh.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+        trailing_button_clicked => { root.atualizar(); }
+    }
+    if root.conversas.length == 0: Text {
+        x: 0; y: 300px; width: parent.width; text: root.mensagem; font-size: Tema.texto-titulo;
+        color: Tema.texto-sec; horizontal-alignment: center;
+    }
+    ListView {
+        x: 0; y: barra.height; width: parent.width; height: parent.height - barra.height;
+        for c[i] in root.conversas: Rectangle {
+            height: 104px;
+            background: toque.pressed ? Tema.superficie-alta : transparent;
+            // avatar com iniciais (o Avatar da biblioteca só aceita imagem)
+            Rectangle {
+                x: 28px; y: 16px; width: 72px; height: 72px; border-radius: 36px; background: c.cor;
+                Text { text: c.iniciais; font-size: Tema.texto-titulo; color: Colors.white; font-family: "DejaVu Sans Bold"; }
+            }
+            Text { x: 124px; y: 16px; width: parent.width - 330px; text: c.nome; font-size: Tema.texto-titulo;
+                   color: Tema.texto; overflow: elide; font-family: c.nao-lidas > 0 ? "DejaVu Sans Bold" : "DejaVu Sans"; }
+            Text { x: 124px; y: 60px; width: parent.width - 330px; text: c.previa; font-size: Tema.texto-corpo;
+                   color: Tema.texto-sec; overflow: elide; }
+            Text { x: parent.width - 190px; y: 20px; width: 160px; text: c.hora; font-size: Tema.texto-corpo;
+                   color: c.nao-lidas > 0 ? Tema.destaque : Tema.texto-sec; horizontal-alignment: right; }
+            if c.nao-lidas > 0: Rectangle {
+                x: parent.width - 30px - self.width; y: 58px; height: 36px;
+                width: max(36px, num.preferred-width + 20px);
+                border-radius: 18px; background: Tema.destaque;
+                num := Text { text: c.nao-lidas; font-size: Tema.texto-corpo; color: Tema.sobre-destaque; }
+            }
+            Rectangle { x: 124px; y: 103px; width: parent.width - 124px; height: 1px; background: Tema.contorno; }
+            toque := TouchArea { clicked => { root.abrir(i); } }
+        }
+    }
 }
 
 component TelaTgChat inherits Rectangle {
@@ -571,34 +642,53 @@ component TelaTgChat inherits Rectangle {
     in property <[Bolha]> bolhas;
     callback escrever();
     callback voltar();
-    Titulo { text: root.nome; }
+    background: Tema.fundo;
+    barra := AppBar {
+        x: 0; y: 0; width: parent.width;
+        title: root.nome;
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
     Flickable {
-        x: 30px; y: 85px; width: 1220px; height: 525px;
-        viewport-height: max(self.height, col.preferred-height);
-        // começa no fim da conversa (mensagens mais novas embaixo)
-        viewport-y: min(0px, self.height - col.preferred-height);
+        x: 24px; y: barra.height; width: parent.width - 48px; height: parent.height - barra.height - 104px;
+        content-height: max(self.height, col.preferred-height);
+        content-y: min(0px, self.height - col.preferred-height);  // começa no fim da conversa
         col := VerticalLayout {
-            width: 1220px;
+            width: parent.width;
             spacing: 10px;
-            padding: 6px;
+            padding-top: 10px;
+            padding-bottom: 10px;
             for b in root.bolhas: HorizontalLayout {
                 alignment: b.minha ? end : start;
                 Rectangle {
-                    max-width: 900px;
-                    border-radius: 16px;
-                    background: b.minha ? #2b5278 : Cores.cartao;
+                    max-width: 860px;
+                    border-radius: 22px;
+                    background: b.minha ? Tema.destaque : Tema.superficie-alta;
                     VerticalLayout {
-                        padding: 14px;
+                        padding: 16px;
                         spacing: 4px;
-                        Text { text: b.texto; wrap: word-wrap; font-size: 26px; color: Cores.texto; }
-                        Text { text: b.hora; font-size: 26px; color: Cores.apagado; horizontal-alignment: right; }
+                        Text { text: b.texto; wrap: word-wrap; font-size: Tema.texto-corpo;
+                               color: b.minha ? Tema.sobre-destaque : Tema.texto; }
+                        Text { text: b.hora; font-size: Tema.texto-corpo; horizontal-alignment: right;
+                               color: b.minha ? Tema.sobre-destaque.with-alpha(0.7) : Tema.texto-sec; }
                     }
                 }
             }
         }
     }
-    Rodape { width: parent.width; direita: "Escrever"; clicou-esquerda => { root.voltar(); }
-             clicou-direita => { root.escrever(); } }
+    // barra de escrever (toque abre o teclado na tela)
+    Rectangle {
+        x: 24px; y: parent.height - 92px; width: parent.width - 150px; height: 76px;
+        border-radius: 38px; background: toque-msg.pressed ? Tema.superficie-alta : Tema.superficie;
+        Text { x: 32px; text: "Mensagem"; font-size: Tema.texto-titulo; color: Tema.texto-sec; }
+        toque-msg := TouchArea { clicked => { root.escrever(); } }
+    }
+    Rectangle {
+        x: parent.width - 108px; y: parent.height - 92px; width: 76px; height: 76px; border-radius: 38px;
+        background: toque-env.pressed ? Tema.destaque.darker(20%) : Tema.destaque;
+        Image { width: 40px; height: 40px; source: @image-url("icones/send.svg"); colorize: Tema.sobre-destaque; }
+        toque-env := TouchArea { clicked => { root.escrever(); } }
+    }
 }
 
 // ------------------------------------------------- configuração do Navidrome
@@ -768,6 +858,12 @@ export component AppWindow inherits Window {
     callback mus-navegar(string);
     callback album-tocar(int);
     callback album-aleatorio();
+    in property <[TgConversa]> tg-conversas;
+    callback tg-abrir(int);
+    callback tg-atualizar();
+    // o Rust chama ao trocar Tema.escuro (Palette guia a MaterialPalette)
+    public function aplicar-tema() { Palette.color-scheme = Tema.escuro ? ColorScheme.dark : ColorScheme.light; }
+    init => { root.aplicar-tema(); }
     in property <string> tg-mensagem;
     in property <string> tg-botao;
     in property <string> tg-nome;
@@ -876,6 +972,12 @@ export component AppWindow inherits Window {
         if root.tela == "tg-login": TelaTgLogin {
             width: 1280px; height: 720px; mensagem: root.tg-mensagem; botao: root.tg-botao;
             digitar => { root.tg-digitar(); }
+            voltar => { root.ir("inicio"); }
+        }
+        if root.tela == "tg-conversas": TelaTgConversas {
+            width: 1280px; height: 720px; conversas: root.tg-conversas; mensagem: root.tg-mensagem;
+            abrir(i) => { root.tg-abrir(i); }
+            atualizar => { root.tg-atualizar(); }
             voltar => { root.ir("inicio"); }
         }
         if root.tela == "tg-chat": TelaTgChat {

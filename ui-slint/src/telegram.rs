@@ -32,6 +32,7 @@ pub enum Cmd {
 pub struct Conversa {
     pub nome: String,
     pub previa: String,
+    pub hora: String,
     pub nao_lidas: i32,
 }
 
@@ -208,12 +209,13 @@ async fn carregar_conversas<F: Fn(Evento)>(client: &Client, avisar: &F) -> Vec<(
     while let Ok(Some(d)) = it.next().await {
         let nome = d.peer().name().unwrap_or("?").to_string();
         let previa = d.last_message.as_ref().map(|m| msg(m).texto).unwrap_or_default();
+        let hora = d.last_message.as_ref().map(hora).unwrap_or_default();
         let nao_lidas = match &d.raw {
             grammers_client::tl::enums::Dialog::Dialog(x) => x.unread_count,
             _ => 0,
         };
         refs.push((d.peer_ref(), nome.clone()));
-        lista.push(Conversa { nome, previa, nao_lidas });
+        lista.push(Conversa { nome, previa, hora, nao_lidas });
     }
     avisar(Evento::Conversas(lista));
     refs

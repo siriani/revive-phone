@@ -13,7 +13,7 @@ use slint::{Color, ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPix
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppWindow, Aparelho, Bolha, Faixa, Item, Moeda, Rede, Tecla, Vela};
+use crate::{Album, AppInfo, AppWindow, Aparelho, Bolha, Faixa, Item, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -743,9 +743,8 @@ fn abrir_telegram(ui: &AppWindow) {
         e.origem = "inicio".into();
     });
     if TG_ESTADO.with_borrow(|e| e == "pronto") {
-        mostrar_direto(ui, "Telegram", vec![]);
-        EST.with_borrow_mut(|e| e.lista.vazio = "carregando conversas...".into());
-        mostrar_lista(ui);
+        ui.set_tg_mensagem(ss("carregando conversas..."));
+        ui.set_tela(ss("tg-conversas"));
         tg_cmd(telegram::Cmd::Conversas);
     } else {
         tg_mostrar_estado(ui);
@@ -767,21 +766,39 @@ fn tg_evento(ui: &AppWindow, ev: telegram::Evento) {
             }
         }
         telegram::Evento::Conversas(v) => {
-            let no_telegram = tela == "tg-login" || (tela == "lista" && ui.get_lista_titulo() == "Telegram");
-            if !no_telegram {
+            if tela != "tg-login" && tela != "tg-conversas" {
                 return;
             }
-            let itens: Vec<ItemDados> = v
+            // avatar: iniciais e uma cor fixa por nome (paleta de tons do Material)
+            const CORES: [(u8, u8, u8); 8] = [
+                (0x5c, 0x6b, 0xc0), (0x26, 0xa6, 0x9a), (0xef, 0x6c, 0x00), (0xab, 0x47, 0xbc),
+                (0x42, 0x85, 0xf4), (0xd8, 0x1b, 0x60), (0x7c, 0xb3, 0x42), (0x8d, 0x6e, 0x63),
+            ];
+            let modelo: Vec<TgConversa> = v
                 .iter()
-                .enumerate()
-                .map(|(i, c)| ItemDados {
-                    titulo: if c.nao_lidas > 0 { format!("({}) {}", c.nao_lidas, c.nome) } else { c.nome.clone() },
-                    sub: c.previa.replace('\n', " "),
-                    verde: c.nao_lidas > 0,
-                    acao: Acao::TgAbrir(i),
+                .map(|c| {
+                    let iniciais: String = c
+                        .nome
+                        .split_whitespace()
+                        .filter_map(|p| p.chars().find(|ch| ch.is_alphanumeric()))
+                        .take(2)
+                        .collect::<String>()
+                        .to_uppercase();
+                    let h = c.nome.bytes().fold(0usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize));
+                    let (r, g, b) = CORES[h % CORES.len()];
+                    TgConversa {
+                        nome: ss(c.nome.clone()),
+                        previa: ss(c.previa.replace('\n', " ")),
+                        hora: ss(c.hora.clone()),
+                        nao_lidas: c.nao_lidas,
+                        iniciais: ss(if iniciais.is_empty() { "?".into() } else { iniciais }),
+                        cor: Color::from_rgb_u8(r, g, b),
+                    }
                 })
                 .collect();
-            mostrar_direto(ui, "Telegram", itens);
+            ui.set_tg_mensagem(ss("nenhuma conversa"));
+            ui.set_tg_conversas(ModelRc::new(VecModel::from(modelo)));
+            ui.set_tela(ss("tg-conversas"));
         }
         telegram::Evento::Chat(nome, msgs) => {
             let m = Rc::new(VecModel::from(msgs.iter().map(bolha).collect::<Vec<_>>()));
@@ -1206,7 +1223,17 @@ fn bt_acao(ui: &AppWindow, acao: &str, mac: &str) {
 
 // ------------------------------------------------------------------- ligação
 
+/// Tema salvo (/var/lib/revive/tema: "escuro" ou "claro").
+const TEMA_FILE: &str = "/var/lib/revive/tema";
+
+pub fn aplicar_tema(ui: &AppWindow, escuro: bool) {
+    ui.global::<Tema>().set_escuro(escuro);
+    ui.invoke_aplicar_tema();
+}
+
 pub fn ligar(ui: &AppWindow) {
+    let escuro = std::fs::read_to_string(TEMA_FILE).map(|s| s.trim() != "claro").unwrap_or(true);
+    aplicar_tema(ui, escuro);
     ui.set_musica_configurada(api().configurado());
     let apps: Vec<AppInfo> = APPS
         .iter()
@@ -1267,6 +1294,8 @@ pub fn ligar(ui: &AppWindow) {
             abrir_teclado(&ui, Modo::Tg(passo.into()));
         }
     });
+    ui.on_tg_abrir(|i| tg_cmd(telegram::Cmd::Abrir(i.max(0) as usize)));
+    ui.on_tg_atualizar(|| tg_cmd(telegram::Cmd::Conversas));
     let f = ui.as_weak();
     ui.on_tg_escrever(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Tg("mensagem".into()))));
     let f = ui.as_weak();

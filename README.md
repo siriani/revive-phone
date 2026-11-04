@@ -87,7 +87,7 @@ The UI text is currently in Brazilian Portuguese.
 
 ## License
 
-MIT (see [LICENSE](LICENSE)). Kernel patches in `devices/*/patches` are GPL-2.0, like
+MIT (see [LICENSE](LICENSE)). Bundled: Slint Material components (`ui-slint/material`, MIT, © SixtyFPS GmbH, metrics scaled 1.5x), Material Symbols icons (`ui-slint/ui/icones`, Apache-2.0, © Google), DejaVu fonts (`ui-slint/ui/fontes`, free license). Kernel patches in `devices/*/patches` are GPL-2.0, like
 the Linux kernel; device tree files keep their original license header.
 
 ---

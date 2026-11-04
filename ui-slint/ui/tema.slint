@@ -1,0 +1,43 @@
+// Revive: central de design. Todas as telas e apps leem cores, texto, formas e
+// espaçamentos daqui. As cores vêm da biblioteca oficial Material 3 do Slint
+// (MaterialPalette, esquemas claro/escuro); o app Ajustes troca o tema em tempo real
+// e o Rust salva a escolha em /var/lib/revive/tema.
+
+import { MaterialPalette } from "@material";
+
+export global Tema {
+    // escolha do usuário (o AppWindow repassa para Palette.color-scheme)
+    in-out property <bool> escuro: true;
+
+    // superfícies (papéis do Material 3)
+    out property <color> fundo: MaterialPalette.background;
+    out property <color> superficie: MaterialPalette.surface_container;
+    out property <color> superficie-alta: MaterialPalette.surface_container_high;
+    out property <color> superficie-baixa: MaterialPalette.surface_container_low;
+    out property <color> contorno: MaterialPalette.outline_variant;
+
+    // texto e ícones
+    out property <color> texto: MaterialPalette.on_surface;
+    out property <color> texto-sec: MaterialPalette.on_surface_variant;
+
+    // destaque (cor primária do esquema) e estados
+    out property <color> destaque: MaterialPalette.primary;
+    out property <color> sobre-destaque: MaterialPalette.on_primary;
+    out property <color> destaque-suave: MaterialPalette.primary_container;
+    out property <color> sobre-destaque-suave: MaterialPalette.on_primary_container;
+    out property <color> sucesso: escuro ? #50c878 : #1e8e4e;
+    out property <color> erro: MaterialPalette.error;
+    out property <color> aviso: #f7931a;
+    out property <color> toque: escuro ? #ffffff26 : #0000001a;
+
+    // tipografia (só tamanhos embutidos na fonte)
+    out property <length> texto-corpo: 26px;
+    out property <length> texto-titulo: 34px;
+    out property <length> texto-cabecalho: 44px;
+
+    // formas e espaçamento
+    out property <length> raio-p: 12px;
+    out property <length> raio-m: 18px;
+    out property <length> raio-g: 28px;
+    out property <length> esp: 16px;
+}
