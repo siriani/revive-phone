@@ -60,11 +60,66 @@ Configuration lives in `/etc/revive/`:
 | File | What |
 |---|---|
 | `navidrome.conf` | Navidrome URLs and account (see `config/navidrome.conf.example`, `chmod 600`) |
+| `mesh.conf` | Meshtastic: `ble=` through the local Bluetooth bridge or `host=` for Wi-Fi direct; optional `pin=` |
 | `wpa_supplicant.conf` | Wi-Fi networks (the UI adds new ones by itself) |
 | `wifi-no-ht` | present on devices whose Wi-Fi firmware crashes with 802.11n |
 
-Services (OpenRC): `revive-ui`, `revive-bt`, `revive-mpv`, `revive-health`.
+Services (OpenRC): `revive-ui`, `revive-bt`, `revive-mesh-ble`, `revive-mpv`,
+`revive-health`.
 Logs: `/var/log/revive-*.log`.
+
+## Meshtastic
+
+The UI shows nearby Meshtastic nodes and exchanges text messages. It speaks the
+Meshtastic stream protocol over TCP port 4403 and reads `/etc/revive/mesh.conf`.
+There are two ways to connect:
+
+### Bluetooth (default, through the `revive-mesh-ble` bridge)
+
+`revive-mesh-ble` connects to the node over Bluetooth LE and listens on
+`127.0.0.1:4403`, so the UI keeps using the same TCP protocol:
+
+```ini
+# /etc/revive/mesh.conf
+ble=AA:BB:CC:DD:EE:FF   # node address; remove this line to scan for 15 s
+pin=123456              # optional; Meshtastic's default PIN
+host=127.0.0.1          # the UI connects to the local bridge
+```
+
+If `ble=` is absent, the service scans for 15 seconds for a device advertising the
+Meshtastic GATT service, uses the first one and writes its address back to the file.
+`host=` and `porta=` are ignored by the bridge (they are for the UI). When the node is
+not found, the service exits and OpenRC starts it again after 60 seconds. If the BLE
+link drops, it reconnects with a 5 s → 60 s backoff while the TCP server keeps
+accepting clients; the UI receives packets again when the node comes back. One TCP
+client is served at a time (a new connection closes the previous one).
+
+Pairing: the Meshtastic PIN is `123456` by default. If BlueZ asks for it, the
+`revive-bt` pairing agent returns `pin=` from `mesh.conf` (or `123456` when no PIN is
+set) when the address matches `ble=`. If pairing still fails, pair once manually and
+the bridge will only reconnect:
+
+```sh
+bluetoothctl
+agent on
+default-agent
+pair AA:BB:CC:DD:EE:FF
+trust AA:BB:CC:DD:EE:FF
+```
+
+### Wi-Fi (direct)
+
+Point `host=` at the node and remove `ble=` so the UI talks to the node directly:
+
+```ini
+# /etc/revive/mesh.conf
+host=192.168.1.50
+# porta=4403
+```
+
+The node accepts only **one TCP client at a time**. Stop `revive-mesh-ble` (or do not
+run both) before using the direct connection, and make sure no other phone or app is
+connected to the node.
 
 ## How it works
 

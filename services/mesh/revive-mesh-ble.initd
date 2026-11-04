@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+description="Revive: ponte Meshtastic Bluetooth LE -> TCP 127.0.0.1:4403"
+command=/usr/bin/python3
+command_args="/usr/local/sbin/revive-mesh-ble"
+supervisor=supervise-daemon
+# sem ble= e sem nó encontrado o script sai; tenta de novo depois de 60 s
+respawn_delay=60
+respawn_max=0
+respawn_on_clean_exit=yes
+output_log="/var/log/revive-mesh-ble.log"
+error_log="/var/log/revive-mesh-ble.log"
+depend() {
+	need dbus bluetooth
+	after revive-bt
+	before revive-ui
+}

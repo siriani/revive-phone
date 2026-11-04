@@ -30,6 +30,7 @@ CMD = f"{RUN}/cmd"
 LOG = "/var/log/revive-bt.log"
 SOM = "/usr/share/revive/test.wav"
 ASOUND = "/etc/asound.conf"
+MESH = "/etc/revive/mesh.conf"
 
 BLUEZ = "org.bluez"
 ADAPTER = "org.bluez.Adapter1"
@@ -47,6 +48,33 @@ def log(msg):
             os.replace(LOG, LOG + ".1")
     except OSError:
         pass
+
+
+def mac_do_path(path):
+    """Caminho D-Bus do BlueZ (dev_AA_BB...) -> MAC."""
+    nome = str(path).rsplit("/", 1)[-1]
+    return nome[4:].replace("_", ":") if nome.startswith("dev_") else ""
+
+
+def pin_mesh(mac):
+    """PIN fixo do nó Meshtastic (mesh.conf: ble=MAC / pin=...)."""
+    ble = pin = None
+    try:
+        with open(MESH) as f:
+            for linha in f:
+                chave, sep, valor = linha.partition("=")
+                if not sep:
+                    continue
+                chave, valor = chave.strip().lower(), valor.strip()
+                if chave == "ble":
+                    ble = valor.upper()
+                elif chave == "pin":
+                    pin = valor
+    except OSError:
+        return None
+    if ble == mac.upper():
+        return pin or "123456"  # PIN padrão do Meshtastic
+    return None
 
 
 def tipo(icon):
@@ -104,6 +132,11 @@ class Agente(dbus.service.Object):
 
     @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="s")
     def RequestPinCode(self, path):
+        mac = mac_do_path(path)
+        fixo = pin_mesh(mac)
+        if fixo:
+            log(f"agente: PIN do mesh.conf para {mac}")
+            return fixo
         pin = f"{random.randint(0, 999999):06d}"
         self.bt.prompt = {"texto": f"Digite {pin} no {self.nome(path)} e aperte Enter", "codigo": pin}
         log(f"agente: PIN {pin} para {path}")
@@ -117,6 +150,11 @@ class Agente(dbus.service.Object):
 
     @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="u")
     def RequestPasskey(self, path):
+        mac = mac_do_path(path)
+        fixo = pin_mesh(mac)
+        if fixo and fixo.isdigit():
+            log(f"agente: passkey do mesh.conf para {mac}")
+            return dbus.UInt32(int(fixo))
         chave = random.randint(0, 999999)
         self.bt.prompt = {"texto": f"Digite {chave:06d} no {self.nome(path)} e aperte Enter",
                           "codigo": f"{chave:06d}"}

@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 DEVICE=""
 [ "$1" = "--device" ] && DEVICE=$2
 
-apk add -q python3 py3-pillow py3-evdev py3-dbus py3-gobject3 font-dejavu \
+apk add -q python3 py3-pillow py3-evdev py3-dbus py3-gobject3 py3-bleak font-dejavu \
 	wpa_supplicant iw bluez bluez-alsa bluez-alsa-utils bluez-btmgmt alsa-utils mpv
 
 mkdir -p /opt/revive /etc/revive /var/lib/revive /usr/share/revive
@@ -29,6 +29,8 @@ else
 fi
 install -m755 services/bluetooth/revive-bt.py /usr/local/sbin/revive-bt
 install -m755 services/bluetooth/revive-bt.initd /etc/init.d/revive-bt
+install -m755 services/mesh/revive-mesh-ble.py /usr/local/sbin/revive-mesh-ble
+install -m755 services/mesh/revive-mesh-ble.initd /etc/init.d/revive-mesh-ble
 install -m755 services/music/revive-mpv.initd /etc/init.d/revive-mpv
 install -m755 services/health/revive-health.sh /usr/local/sbin/revive-health
 install -m755 services/health/revive-health.initd /etc/init.d/revive-health
@@ -41,7 +43,7 @@ sed -i 's/^#\?AutoEnable=.*/AutoEnable=true/' /etc/bluetooth/main.conf
 grep -q '^AutoEnable=true' /etc/bluetooth/main.conf || printf '\n[Policy]\nAutoEnable=true\n' >> /etc/bluetooth/main.conf
 sed -i 's/^#\?FastConnectable *=.*/FastConnectable = true/' /etc/bluetooth/main.conf
 
-for s in bluetooth bluealsa revive-bt revive-mpv revive-ui; do rc-update add $s default; done
+for s in bluetooth bluealsa revive-bt revive-mesh-ble revive-mpv revive-ui; do rc-update add $s default; done
 rc-update add revive-health boot
 
 if [ -n "$DEVICE" ]; then
