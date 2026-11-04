@@ -636,6 +636,25 @@ fn ir(ui: &AppWindow, tela: &str) {
 }
 
 /// Volta para a tela inicial (usado quando o DOOM devolve a tela para a interface).
+/// Botões físicos de volume: ±5 no volume do player (mpv), com aviso na tela.
+pub fn volume_tecla(ui: &AppWindow, passo: i32) {
+    let atual = dados::mpv(serde_json::json!(["get_property", "volume"])).and_then(|v| v.as_f64()).unwrap_or(80.0);
+    let novo = (atual + 5.0 * passo as f64).clamp(0.0, 130.0).round();
+    dados::mpv(serde_json::json!(["set_property", "volume", novo]));
+    let msg = i18n::tf("volume {}%", &[&format!("{novo:.0}")]);
+    ui.set_toc_volume(ss(msg.clone()));
+    ui.set_toc_vol((novo / 100.0).clamp(0.0, 1.0) as f32);
+    ui.set_aviso(ss(msg.clone()));
+    let fraca = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_secs(2), move || {
+        if let Some(ui) = fraca.upgrade() {
+            if ui.get_aviso() == msg.as_str() {
+                ui.set_aviso(ss(""));
+            }
+        }
+    });
+}
+
 pub fn voltar_inicio(ui: &AppWindow) {
     ir(ui, "inicio");
 }

@@ -247,6 +247,10 @@ fn main() {
                 janela.window().dispatch_event(ev);
             }
         }
+        for passo in std::mem::take(&mut entrada.volume) {
+            houve_entrada = true;
+            app::volume_tecla(&ui, passo);
+        }
         etapa("ler e despachar entrada", t_ent);
         let t = Instant::now();
         ui.set_mouse_visivel(entrada.mouse_usado);

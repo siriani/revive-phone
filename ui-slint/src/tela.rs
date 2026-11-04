@@ -195,6 +195,8 @@ enum Tipo {
     Touch,
     Mouse,
     Teclado,
+    /// botões de volume do aparelho (gpio-keys, pm8941_resin)
+    Botoes,
 }
 
 struct Disp {
@@ -227,6 +229,8 @@ pub struct Entrada {
     /// atraso entre o evento do kernel (relógio do evdev) e a leitura aqui
     pub atraso_evento: Option<Duration>,
     ts_syn: Option<std::time::SystemTime>,
+    /// apertos dos botões de volume (+1 / -1) ainda não tratados pela interface
+    pub volume: Vec<i32>,
 }
 
 const EV_SYN: u16 = 0;
@@ -246,6 +250,8 @@ const KEY_Z: u16 = 44;
 const KEY_LEFTSHIFT: u16 = 42;
 const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_CAPSLOCK: u16 = 58;
+const KEY_VOLUMEDOWN: u16 = 114;
+const KEY_VOLUMEUP: u16 = 115;
 
 /// Teclado físico (padrão US): código -> (normal, com shift)
 fn tecla(code: u16) -> Option<(char, char)> {
@@ -287,6 +293,7 @@ impl Entrada {
             ultimo_toque: None,
             atraso_evento: None,
             ts_syn: None,
+            volume: vec![],
         };
         e.buscar();
         e
@@ -322,6 +329,8 @@ impl Entrada {
                 Tipo::Mouse
             } else if tem(KEY_A) && tem(KEY_Z) {
                 Tipo::Teclado
+            } else if tem(KEY_VOLUMEUP) || tem(KEY_VOLUMEDOWN) {
+                Tipo::Botoes
             } else {
                 continue;
             };
@@ -391,6 +400,13 @@ impl Entrada {
                 Tipo::Touch => self.touch(t, c, v, max_x, max_y, tela, &mut saida),
                 Tipo::Mouse => self.mouse(t, c, v, tela, &mut saida),
                 Tipo::Teclado => self.teclado(t, c, v, &mut saida),
+                // aperto (1) e repetição (2) contam; soltar (0) não
+                Tipo::Botoes if t == EV_KEY && v >= 1 => match c {
+                    KEY_VOLUMEUP => self.volume.push(1),
+                    KEY_VOLUMEDOWN => self.volume.push(-1),
+                    _ => {}
+                },
+                Tipo::Botoes => {}
             }
         }
         saida
