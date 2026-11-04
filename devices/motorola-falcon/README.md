@@ -7,7 +7,7 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
 
 | Part | Status | Notes |
 |---|---|---|
-| Display | ✅ | `simple-framebuffer` left on by the bootloader; brightness is fixed |
+| Display (DRM/KMS, `msm`) | ✅ | CMI 720p panel driver ([patch 0002](patches/0002-drm-panel-falcon-cmi-reset-energia-clock.patch)); loaded 15 s after boot by `revive-video`. simplefb stays enabled as the fallback |
 | Touch (Synaptics S2316T, RMI4) | ✅ | needs **l28 at 3.1 V** (see below) |
 | Wi-Fi (WCN3620, 2.4 GHz) | ✅ | needs the wcn36xx patch; 802.11n disabled (up to 54 Mbps) |
 | Bluetooth | ✅ | fixed address via `local-bd-address` (`revive-set-bt-address`) |
@@ -17,7 +17,11 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
 | Vibration, temperatures | ✅ | |
 | Notification LED | ⚠️ | LPG + MPP6 driver loads, not visually confirmed |
 | CPU frequency | ⚠️ | 300–787 MHz; 1.19 GHz needs CPR/voltage scaling (not done) |
-| Audio (speaker/jack), GPU, cameras | ❌ | cameras need CAMSS for MSM8226, which mainline lacks |
+| Backlight (WLED, PM8226) | ✅ | `qcom_wled`, loaded with the display driver |
+| GPU (Adreno 305) | ✅ | Mesa freedreno (FD305, OpenGL 3.1); `a300_pm4.fw` and `a300_pfp.fw` from linux-firmware |
+| ADSP (LPASS) | ✅ | remoteproc with the firmware extracted from the stock Android (not redistributed) |
+| Camera (front MT9M114) | ⚠️ | sensor detected over CCI; no frames yet. Rear AR0543 not started |
+| Audio (speaker/jack) | ⚠️ | WIP: the ADSP is up; the WCD9306 codec driver is in progress |
 
 ## Fixes in this folder
 
@@ -32,13 +36,47 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
    stock firmware uses 3.1 V. Underpowered, it NAKed I²C reads and held its interrupt
    line low. The DTS now sets l28 to 3.1 V, uses a level-low interrupt and a pull-up.
 4. **Regulator l8 must stay on** (it feeds the Wi-Fi PLL).
-5. **No picture** — two DSI clocks that Linux cannot enable were removed from the
-   framebuffer node (the bootloader leaves them on).
+5. **Framebuffer clocks** — the simplefb node keeps the DSI byte and pixel clocks
+   (`MDSS_BYTE0_CLK`, `MDSS_PCLK0_CLK`) that the bootloader leaves on. Without simplefb,
+   the `msm` driver hangs reading the DSI PLL, so simplefb stays enabled and `msm` takes
+   over after boot (see [Testing safely](#testing-safely)).
 6. **lk2nd cannot find the falcon DTB** — `boot/revive-fixboot.sh` copies
    `/etc/revive/device.dtb` to `/boot` and writes an explicit `fdt` line into
    `extlinux.conf`; an apk hook runs it after every package update.
 7. **Touch/accelerometer probe sometimes fails at boot** — `revive-i2c-retry` re-binds
    the drivers until the devices appear.
+
+## Testing safely
+
+The display, backlight and GPU drivers are loaded after boot, not during it: a bad DSI
+initialisation used to freeze the phone while it started.
+
+- **Boot protection.** `install.sh` adds `modprobe.blacklist=msm,qcom_wled` to the
+  `append` line of `/boot/extlinux/extlinux.conf`. The kernel then does not auto-load
+  `msm` or `qcom_wled`, so the boot finishes on simplefb even if the driver would hang.
+  `revive-fixboot` does not remove that parameter.
+- **Late loading.** The `revive-video` service waits 15 s after boot, loads `msm` and
+  `qcom_wled` and restarts `revive-ui`. Its log is `/var/log/revive-video.log`. To change
+  the delay, set `REVIVE_VIDEO_DELAY` in `/etc/conf.d/revive-video`.
+- **Check that the late load worked.** The log should say `msm e qcom_wled carregados`.
+  If it says `falhou`, the blacklist may also refuse explicit loads. Then remove the
+  parameter from the `append` line by hand, for the test only, and reboot.
+- **Loading by hand** (`modprobe msm`): keep an SSH session open first. If the DSI hangs,
+  the phone needs a power cycle.
+- **Never use a DTB without the eMMC mask.** `&sdhc_1` must keep
+  `sdhci-caps-mask = <0x7 0x0>` (no HS200/SDR104/DDR50). Without it, HS200 tuning
+  corrupted writes on this eMMC until ext4 went read-only. Before copying a DTB to
+  `/etc/revive/device.dtb`, check that the mask is there:
+  ```sh
+  dtc -I dtb -O dts /etc/revive/device.dtb | grep sdhci-caps-mask   # expect <0x07 0x00>
+  ```
+- **Trying a new DTB.** Keep the working `device.dtb` in `/etc/revive/backup/`, copy the
+  new one, run `revive-fixboot`, reboot once, then check `dmesg` for the
+  `motorola,falcon-panel-cmi` probe (no regulator or reset errors) and `ls /dev/dri`.
+  To go back, restore the backup, run `revive-fixboot` and reboot.
+- **Local Bluetooth address.** The DTS has only a commented placeholder for
+  `local-bd-address`. Set the real address on the phone with `revive-set-bt-address`,
+  never in the repository.
 
 ## Installing from scratch
 
@@ -60,7 +98,10 @@ Tested on the XT1033 (Brazilian dual SIM), Snapdragon 400 (MSM8226, 4× Cortex-A
    `pmbootstrap install` and flash the image to `userdata`
    (`fastboot flash userdata <image>`); grow the root partition afterwards.
 5. **Firmware**: copy `wcnss.*`, `wlan/prima/*`, `mba.*` and `modem.*` from the stock
-   Android `modem`/`persist` partitions to `/lib/firmware` (not redistributable).
+   Android `modem`/`persist` partitions to `/lib/firmware` (not redistributable). The
+   ADSP (`adsp.mdt` and `adsp.b*`) goes from the same stock install to
+   `/lib/firmware/qcom/msm8226/motorola/falcon/`. `install.sh` downloads the GPU firmware
+   (`a300_pm4.fw`, `a300_pfp.fw`) from linux-firmware when it is missing.
 6. **Revive**: copy the compiled DTB to `/etc/revive/device.dtb`, then
    `./install.sh --device motorola-falcon`, put your network in
    `/etc/revive/wpa_supplicant.conf`, optionally write the stock Wi-Fi MAC to

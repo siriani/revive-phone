@@ -32,14 +32,14 @@ little RAM.
 - **Persistent logs** that survive hard freezes (kernel log and a health line per
   minute), which makes porting new devices much easier.
 
-Planned: notification panel (ntfy / Home Assistant / MQTT), GPU-accelerated display
-via a proper panel driver, more devices.
+Planned: notification panel (ntfy / Home Assistant / MQTT), audio and cameras on the
+Moto G, more devices.
 
 ## Supported devices
 
 | Device | Status | Notes |
 |---|---|---|
-| [Motorola Moto G 2013 (falcon)](devices/motorola-falcon/README.md) | Working | Wi-Fi, touch, Bluetooth, modem, GPS, sensors. No cameras. |
+| [Motorola Moto G 2013 (falcon)](devices/motorola-falcon/README.md) | Working | Wi-Fi, touch, Bluetooth, modem, GPS, sensors, display (DRM), backlight, GPU. Audio and cameras in progress. |
 
 Adding a device means getting postmarketOS running on it and, if needed, a folder in
 `devices/` with its quirks (see the falcon one as an example).
@@ -65,7 +65,7 @@ Configuration lives in `/etc/revive/`:
 | `wifi-no-ht` | present on devices whose Wi-Fi firmware crashes with 802.11n |
 
 Services (OpenRC): `revive-ui`, `revive-bt`, `revive-mesh-ble`, `revive-mpv`,
-`revive-health`.
+`revive-health`, `revive-video` (loads the display driver after boot on the Moto G).
 Logs: `/var/log/revive-*.log`.
 
 ## Meshtastic
@@ -154,6 +154,10 @@ jukebox do seu Navidrome, cotação do Bitcoin, central Bluetooth para caixas de
 teclados e mouses e, em breve, painel de notificações. Roda sobre o postmarketOS e
 desenha a própria interface na tela (sem desktop e sem GPU), em paisagem, girando
 pelo acelerômetro.
+
+No Moto G (falcon), a tela já usa o driver DRM (`msm`), com luz de fundo e GPU; o
+driver entra depois do boot, pelo serviço `revive-video`. Áudio e câmera estão em
+andamento.
 
 Instalação: num celular com postmarketOS, como root, `./install.sh --device
 motorola-falcon` e reiniciar. As configurações ficam em `/etc/revive/` e os logs em
