@@ -47,3 +47,17 @@ pub fn restaurar() {
         definir(v);
     }
 }
+
+/// Apaga a tela (backlight em 0) sem mexer no brilho salvo.
+pub fn apagar() {
+    let _ = std::fs::write(format!("{DIR}/brightness"), "0");
+}
+
+/// Acende a tela de novo no brilho salvo (ou no máximo, se não houver).
+pub fn acender() {
+    if std::fs::metadata(ARQUIVO).is_ok() {
+        restaurar();
+    } else {
+        definir(1.0);
+    }
+}

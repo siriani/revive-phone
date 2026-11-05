@@ -6,6 +6,7 @@
 
 mod app;
 mod brilho;
+mod espera;
 mod camera;
 mod clima;
 mod cripto;
@@ -150,6 +151,9 @@ fn main() {
                     giro.store(v, Ordering::Relaxed);
                 }
                 std::thread::sleep(Duration::from_millis(300));
+                while espera::ativa() {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
             }
         });
     }
@@ -165,6 +169,8 @@ fn main() {
             eprintln!("laço lento: {nome} levou {:.0} ms", d.as_secs_f64() * 1000.0);
         }
     };
+    // botão liga/desliga: tela apagada não desenha nem aceita toque
+    let mut apagada = false;
     loop {
         // O DOOM roda como app, desenhando direto no framebuffer: aqui só se espera.
         // A entrada é lida pelo jogo, então nada é despachado para a interface.
@@ -196,7 +202,7 @@ fn main() {
 
         // redesenha só o que mudou
         let t0 = Instant::now();
-        let desenhou = janela.draw_if_needed(|r| tela.desenhar(r));
+        let desenhou = !apagada && janela.draw_if_needed(|r| tela.desenhar(r));
         if desenhou {
             quadros += 1;
             let toque = entrada.ultimo_toque.take();
@@ -243,8 +249,23 @@ fn main() {
                 continue;
             }
             for ev in entrada.ler(p.fd, &tela) {
+                // com a tela apagada os toques são descartados (bolso, mesa)
+                if apagada {
+                    continue;
+                }
                 houve_entrada = true;
                 janela.window().dispatch_event(ev);
+            }
+        }
+        for _ in 0..std::mem::take(&mut entrada.power) {
+            apagada = !apagada;
+            if apagada {
+                boost_ate = None;
+                espera::entrar();
+            } else {
+                espera::sair();
+                tela.redesenhar_tudo = true;
+                janela.request_redraw();
             }
         }
         for passo in std::mem::take(&mut entrada.volume) {
@@ -257,7 +278,7 @@ fn main() {
         ui.set_mouse_x(entrada.mx);
         ui.set_mouse_y(entrada.my);
 
-        if houve_entrada {
+        if houve_entrada && !apagada {
             if boost_ate.is_none() {
                 cpu_min(true);
             }

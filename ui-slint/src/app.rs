@@ -2035,7 +2035,11 @@ fn ligar_painel(ui: &AppWindow) {
     };
     atualizar();
     let t = slint::Timer::default();
-    t.start(slint::TimerMode::Repeated, Duration::from_secs(60), atualizar);
+    t.start(slint::TimerMode::Repeated, Duration::from_secs(60), move || {
+        if !crate::espera::ativa() {
+            atualizar()
+        }
+    });
     std::mem::forget(t);
 }
 
@@ -2257,6 +2261,9 @@ pub fn ligar(ui: &AppWindow) {
     // relógio
     let fraca = ui.as_weak();
     let tique = move || {
+        if crate::espera::ativa() {
+            return;
+        }
         if let Some(ui) = fraca.upgrade() {
             let agora = chrono::Local::now();
             ui.set_hora(ss(agora.format("%H:%M").to_string()));
@@ -2301,7 +2308,11 @@ pub fn ligar(ui: &AppWindow) {
     ui.on_atualizar_btc(move || a());
     let t = slint::Timer::default();
     // a API gratuita da CoinGecko limita as chamadas por minuto (o app Cripto também usa)
-    t.start(slint::TimerMode::Repeated, Duration::from_secs(300), atualizar_btc);
+    t.start(slint::TimerMode::Repeated, Duration::from_secs(300), move || {
+        if !crate::espera::ativa() {
+            atualizar_btc()
+        }
+    });
     std::mem::forget(t);
 
     // telas
@@ -2446,6 +2457,10 @@ pub fn ligar(ui: &AppWindow) {
             });
             n += 1;
             std::thread::sleep(Duration::from_secs(1));
+            // tela apagada: status a cada 5 s (o Wi-Fi conta pelo n, então só espera)
+            if crate::espera::ativa() {
+                std::thread::sleep(Duration::from_secs(4));
+            }
         }
     });
 }

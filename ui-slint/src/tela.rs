@@ -195,7 +195,7 @@ enum Tipo {
     Touch,
     Mouse,
     Teclado,
-    /// botões de volume do aparelho (gpio-keys, pm8941_resin)
+    /// botões do aparelho: volume (gpio-keys, pm8941_resin) e liga/desliga (pm8941_pwrkey)
     Botoes,
 }
 
@@ -231,6 +231,8 @@ pub struct Entrada {
     ts_syn: Option<std::time::SystemTime>,
     /// apertos dos botões de volume (+1 / -1) ainda não tratados pela interface
     pub volume: Vec<i32>,
+    /// apertos do botão liga/desliga ainda não tratados (apaga/acende a tela)
+    pub power: u32,
 }
 
 const EV_SYN: u16 = 0;
@@ -252,6 +254,7 @@ const KEY_RIGHTSHIFT: u16 = 54;
 const KEY_CAPSLOCK: u16 = 58;
 const KEY_VOLUMEDOWN: u16 = 114;
 const KEY_VOLUMEUP: u16 = 115;
+const KEY_POWER: u16 = 116;
 
 /// Teclado físico (padrão US): código -> (normal, com shift)
 fn tecla(code: u16) -> Option<(char, char)> {
@@ -294,6 +297,7 @@ impl Entrada {
             atraso_evento: None,
             ts_syn: None,
             volume: vec![],
+            power: 0,
         };
         e.buscar();
         e
@@ -329,7 +333,7 @@ impl Entrada {
                 Tipo::Mouse
             } else if tem(KEY_A) && tem(KEY_Z) {
                 Tipo::Teclado
-            } else if tem(KEY_VOLUMEUP) || tem(KEY_VOLUMEDOWN) {
+            } else if tem(KEY_VOLUMEUP) || tem(KEY_VOLUMEDOWN) || tem(KEY_POWER) {
                 Tipo::Botoes
             } else {
                 continue;
@@ -404,6 +408,8 @@ impl Entrada {
                 Tipo::Botoes if t == EV_KEY && v >= 1 => match c {
                     KEY_VOLUMEUP => self.volume.push(1),
                     KEY_VOLUMEDOWN => self.volume.push(-1),
+                    // só o aperto: segurar o botão não fica piscando a tela
+                    KEY_POWER if v == 1 => self.power += 1,
                     _ => {}
                 },
                 Tipo::Botoes => {}
