@@ -931,3 +931,99 @@ msgstr "It takes about a minute to come back."
 
 msgid "Para ligar de novo, segure o botão liga/desliga."
 msgstr "To turn it back on, hold the power button."
+
+msgid "Acertar pela internet"
+msgstr "Set automatically"
+
+msgid "Ainda não sincronizado (sem internet?)"
+msgstr "Not synchronized yet (no internet?)"
+
+msgid "Armazenamento"
+msgstr "Storage"
+
+msgid "As teclas de volume do aparelho também mudam o volume, mesmo com a tela apagada."
+msgstr "The device's volume keys also change the volume, even with the screen off."
+
+msgid "Automático"
+msgstr "Automatic"
+
+msgid "Bateria"
+msgstr "Battery"
+
+msgid "Carregada"
+msgstr "Charged"
+
+msgid "Carregando"
+msgstr "Charging"
+
+msgid "Carregando pelo USB"
+msgstr "Charging over USB"
+
+msgid "Conectado, sem carregar"
+msgstr "Connected, not charging"
+
+msgid "Contas"
+msgstr "Accounts"
+
+msgid "Data e hora"
+msgstr "Date & time"
+
+msgid "Detalhes"
+msgstr "Details"
+
+msgid "Formato 24 horas"
+msgstr "24-hour format"
+
+msgid "Fuso horário"
+msgstr "Time zone"
+
+msgid "Ligado há"
+msgstr "Uptime"
+
+msgid "Na bateria"
+msgstr "On battery"
+
+msgid "O percentual é estimado pela tensão da bateria: este aparelho não tem medidor de carga no kernel. Carregando, a estimativa fica mais alta que a real."
+msgstr "The percentage is estimated from the battery voltage: this device has no charge gauge in the kernel. While charging, the estimate runs higher than the real value."
+
+msgid "Para onde vai o som quando uma caixa Bluetooth conecta"
+msgstr "Where the sound goes when a Bluetooth speaker connects"
+
+msgid "Saída de som"
+msgstr "Sound output"
+
+msgid "Sempre o alto-falante"
+msgstr "Always the speaker"
+
+msgid "Serviço de hora (chrony) não encontrado"
+msgstr "Time service (chrony) not found"
+
+msgid "Sincronizado pela internet"
+msgstr "Synchronized over the internet"
+
+msgid "Som"
+msgstr "Sound"
+
+msgid "Testar o som"
+msgstr "Test the sound"
+
+msgid "Toca um bipe curto na saída atual"
+msgstr "Plays a short beep on the current output"
+
+msgid "Tocar"
+msgstr "Play"
+
+msgid "Volume"
+msgstr "Volume"
+
+msgid "quente demais"
+msgstr "overheated"
+
+msgid "saúde boa"
+msgstr "good health"
+
+msgid "{} d {} h"
+msgstr "{} d {} h"
+
+msgid "{} usados de {}"
+msgstr "{} used of {}"

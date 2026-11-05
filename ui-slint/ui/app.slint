@@ -930,6 +930,30 @@ export component AppWindow inherits Window {
     callback ajustes-girar(bool);
     callback reiniciar();
     callback desligar();
+    // Ajustes: som, bateria, data e hora, sistema (o Rust preenche ao abrir e a cada 2 s)
+    in-out property <float> aj-volume: 0.8;
+    callback aj-volume-mudar(float);
+    in property <int> aj-saida-som;
+    callback aj-saida(int);
+    callback aj-testar-som();
+    in property <int> aj-bat-pct: -1;
+    in property <string> aj-bat-estado;
+    in property <string> aj-bat-detalhe;
+    in property <bool> aj-bat-carregando;
+    in property <string> aj-agora-hora;
+    in property <string> aj-agora-data;
+    in property <[string]> aj-fusos;
+    in property <int> aj-fuso-indice: -1;
+    in property <string> aj-fuso-nome;
+    callback aj-fuso(int);
+    in property <bool> aj-24h: true;
+    callback aj-formato-24h(bool);
+    in property <string> aj-sincronia;
+    in property <string> aj-versao;
+    in property <string> aj-so;
+    in property <string> aj-kernel;
+    in property <string> aj-ligado;
+    in property <string> aj-armazenamento;
     in property <int> idioma-atual;
     in-out property <float> brilho: 1.0;
     in property <bool> brilho-disponivel: true;
@@ -1166,6 +1190,29 @@ export component AppWindow inherits Window {
             bt-resumo: root.bt-conectados;
             reiniciar => { root.reiniciar(); }
             desligar => { root.desligar(); }
+            volume <=> root.aj-volume;
+            volume-mudar(v) => { root.aj-volume-mudar(v); }
+            saida-som: root.aj-saida-som;
+            saida(i) => { root.aj-saida(i); }
+            testar-som => { root.aj-testar-som(); }
+            bat-pct: root.aj-bat-pct;
+            bat-estado: root.aj-bat-estado;
+            bat-detalhe: root.aj-bat-detalhe;
+            bat-carregando: root.aj-bat-carregando;
+            agora-hora: root.aj-agora-hora;
+            agora-data: root.aj-agora-data;
+            fusos: root.aj-fusos;
+            fuso-indice: root.aj-fuso-indice;
+            fuso-nome: root.aj-fuso-nome;
+            fuso(i) => { root.aj-fuso(i); }
+            relogio-24h: root.aj-24h;
+            formato-24h(v) => { root.aj-formato-24h(v); }
+            sincronia: root.aj-sincronia;
+            versao: root.aj-versao;
+            so: root.aj-so;
+            kernel: root.aj-kernel;
+            ligado: root.aj-ligado;
+            armazenamento: root.aj-armazenamento;
         }
         if root.tela == "clima": TelaClima {
             width: 1280px; height: 720px;

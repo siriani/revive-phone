@@ -101,6 +101,30 @@ def tipo(icon):
     return ""
 
 
+SAIDA_PREF = "/var/lib/revive/saida-som"
+
+
+def so_alto_falante():
+    """Ajustes > Som > Saída: "interno" = nunca trocar para a caixa Bluetooth."""
+    try:
+        with open(SAIDA_PREF) as f:
+            return f.read().strip() == "interno"
+    except OSError:
+        return False
+
+
+def usar_caixa(mac):
+    """Caixa de som Bluetooth como saída padrão do ALSA."""
+    with open(ASOUND, "w") as f:
+        f.write("# escrito pelo revive-bt: última caixa de som conectada\n"
+                f'defaults.bluealsa.device "{mac}"\n'
+                'defaults.bluealsa.profile "a2dp"\n'
+                'pcm.!default { type plug slave.pcm "bluealsa" }\n'
+                'ctl.!default { type bluealsa }\n')
+    log(f"saída de som: caixa {mac}")
+    recarregar_mpv()
+
+
 def recarregar_mpv():
     """O mpv só relê o asound.conf ao reabrir a saída de áudio."""
     try:
@@ -409,21 +433,24 @@ class Bluetooth:
             log(f"esquecer {mac}: {e}")
 
     def depois_de_conectar(self, mac):
-        """Caixa de som conectada vira a saída padrão do ALSA."""
+        """Caixa de som conectada vira a saída padrão do ALSA (se o Ajustes deixar)."""
         aparelho = next((a for a in self.aparelhos() if a["mac"] == mac), None)
-        if aparelho and aparelho["tipo"] == "som":
-            with open(ASOUND, "w") as f:
-                f.write("# escrito pelo revive-bt: última caixa de som conectada\n"
-                        f'defaults.bluealsa.device "{mac}"\n'
-                        'defaults.bluealsa.profile "a2dp"\n'
-                        'pcm.!default { type plug slave.pcm "bluealsa" }\n'
-                        'ctl.!default { type bluealsa }\n')
-            recarregar_mpv()
+        if aparelho and aparelho["tipo"] == "som" and not so_alto_falante():
+            usar_caixa(mac)
             self.som(mac)
 
     def saida_de_som(self):
-        """Sem caixa conectada, a saída padrão volta para o alto-falante interno."""
-        if any(a["tipo"] == "som" and a["conectado"] for a in self.aparelhos()):
+        """Sem caixa conectada (ou com Ajustes > Som > Sempre o alto-falante), a saída
+        padrão é o alto-falante interno; com caixa conectada e modo automático, a caixa."""
+        caixa = next((a["mac"] for a in self.aparelhos() if a["tipo"] == "som" and a["conectado"]), None)
+        if caixa and not so_alto_falante():
+            try:
+                with open(ASOUND) as f:
+                    if caixa in f.read():
+                        return
+            except OSError:
+                pass
+            usar_caixa(caixa)
             return
         if not os.path.exists(CARTAO_INTERNO):
             return

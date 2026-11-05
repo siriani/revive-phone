@@ -13,6 +13,17 @@ const FORA: &[&str] = &[
 
 fn main() {
     println!("cargo:rerun-if-changed=lang");
+    // versão mostrada em Ajustes > Sistema: commit do repositório no build
+    let git = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "sem git".into());
+    println!("cargo:rustc-env=REVIVE_GIT={git}");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs/heads");
     // tamanhos de texto da biblioteca Material (escalada 1,5x): chegam aos componentes por
     // variável, então o compilador não os vê; sem isto a fonte não seria pré-renderizada neles
     // (set_var é unsafe na edição 2024; o build script é de uma thread só)

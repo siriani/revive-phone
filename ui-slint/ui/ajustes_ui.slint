@@ -13,8 +13,8 @@ component Categoria inherits Rectangle {
     in property <string> titulo;
     in property <bool> ativo;
     callback escolher();
-    height: 76px;
-    border-radius: 38px;
+    height: 64px;
+    border-radius: 32px;
     background: ativo ? Tema.destaque-suave : (toque.pressed ? Tema.toque : transparent);
     Image { x: 24px; y: (parent.height - 36px) / 2; width: 36px; height: 36px; source: root.icone;
             colorize: root.ativo ? Tema.sobre-destaque-suave : Tema.texto-sec; }
@@ -80,13 +80,43 @@ export component TelaAjustes inherits Rectangle {
     in property <string> wifi-ssid;
     in property <string> bt-resumo;
 
+    // Som
+    in-out property <float> volume: 0.8;    // 0..1.3 (volume do mpv / 100)
+    callback volume-mudar(float);
+    in property <int> saida-som: 0;         // 0 = automático, 1 = sempre o alto-falante
+    callback saida(int);
+    callback testar-som();
+
+    // Bateria
+    in property <int> bat-pct: -1;          // -1 = sem leitura
+    in property <string> bat-estado;        // "Carregando pelo USB", "Na bateria"...
+    in property <string> bat-detalhe;       // tensão e saúde
+    in property <bool> bat-carregando;
+
+    // Data e hora
+    in property <string> agora-hora;
+    in property <string> agora-data;
+    in property <[string]> fusos;
+    in property <int> fuso-indice: -1;
+    in property <string> fuso-nome;
+    callback fuso(int);
+    in property <bool> relogio-24h: true;
+    callback formato-24h(bool);
+    in property <string> sincronia;
+
     // Sistema
+    in property <string> versao;
+    in property <string> so;
+    in property <string> kernel;
+    in property <string> ligado;
+    in property <string> armazenamento;
     callback reiniciar();
     callback desligar();
 
     in-out property <int> secao: 0;
     property <bool> menu-cores;
     property <bool> menu-idioma;
+    property <bool> lista-fusos;
     property <string> confirmar;            // "", "reiniciar" ou "desligar"
     property <[string]> idiomas: ["Português", "English", "Español"];
 
@@ -101,15 +131,18 @@ export component TelaAjustes inherits Rectangle {
     // ------------------------------------------------------------ categorias
     property <[{icone: image, titulo: string}]> categorias: [
         { icone: @image-url("icones/smartphone.svg"), titulo: @tr("Tela") },
+        { icone: @image-url("icones/volume_up.svg"), titulo: @tr("Som") },
         { icone: @image-url("icones/palette.svg"), titulo: @tr("Aparência") },
         { icone: @image-url("icones/wifi.svg"), titulo: @tr("Conexões") },
-        { icone: @image-url("icones/hub.svg"), titulo: @tr("Serviços") },
+        { icone: @image-url("icones/person.svg"), titulo: @tr("Contas") },
+        { icone: @image-url("icones/battery_charging_full.svg"), titulo: @tr("Bateria") },
+        { icone: @image-url("icones/schedule.svg"), titulo: @tr("Data e hora") },
         { icone: @image-url("icones/info.svg"), titulo: @tr("Sistema") },
     ];
     for c[i] in root.categorias: Categoria {
-        x: 24px; y: 116px + i * 88px; width: 340px;
+        x: 24px; y: 104px + i * 74px; width: 340px;
         icone: c.icone; titulo: c.titulo; ativo: root.secao == i;
-        escolher => { root.secao = i; root.menu-cores = false; root.menu-idioma = false; }
+        escolher => { root.secao = i; root.menu-cores = false; root.menu-idioma = false; root.lista-fusos = false; }
     }
 
     property <length> px: 392px;              // início da coluna de opções
@@ -165,7 +198,7 @@ export component TelaAjustes inherits Rectangle {
     }
 
     // ------------------------------------------------------------ Aparência
-    if root.secao == 1: Rectangle {
+    if root.secao == 2: Rectangle {
         x: root.px; y: 116px; width: root.lw; height: 600px;
         Linha {
             x: 0; y: 0; width: parent.width;
@@ -203,7 +236,7 @@ export component TelaAjustes inherits Rectangle {
     }
 
     // ------------------------------------------------------------ Conexões
-    if root.secao == 2: Rectangle {
+    if root.secao == 3: Rectangle {
         x: root.px; y: 116px; width: root.lw; height: 600px;
         Linha {
             x: 0; y: 0; width: parent.width; seta: true;
@@ -220,8 +253,8 @@ export component TelaAjustes inherits Rectangle {
         }
     }
 
-    // ------------------------------------------------------------ Serviços
-    if root.secao == 3: Rectangle {
+    // ------------------------------------------------------------ Contas
+    if root.secao == 4: Rectangle {
         x: root.px; y: 116px; width: root.lw; height: 600px;
         Linha {
             x: 0; y: 0; width: parent.width; seta: true;
@@ -235,32 +268,164 @@ export component TelaAjustes inherits Rectangle {
             sub: @tr("Conta e conversas");
             tocar => { root.ir("telegram"); }
         }
-        Linha {
-            x: 0; y: 2 * root.passo; width: parent.width; seta: true;
-            icone: @image-url("icones/hub.svg"); titulo: "Meshtastic";
-            sub: @tr("Nós por perto e mensagens");
-            tocar => { root.ir("mesh"); }
-        }
     }
 
     // ------------------------------------------------------------ Sistema
-    if root.secao == 4: Rectangle {
+    if root.secao == 7: Rectangle {
         x: root.px; y: 116px; width: root.lw; height: 600px;
+        info := Rectangle {
+            x: 0; y: 0; width: parent.width; height: 236px;
+            border-radius: Tema.raio-m; background: Tema.superficie;
+            property <[{k: string, v: string}]> itens: [
+                { k: "Revive", v: root.versao },
+                { k: @tr("Sistema"), v: root.so },
+                { k: "Kernel", v: root.kernel },
+                { k: @tr("Ligado há"), v: root.ligado },
+                { k: @tr("Armazenamento"), v: root.armazenamento },
+            ];
+            for it[i] in info.itens: Rectangle {
+                x: 0; y: 14px + i * 42px; width: parent.width; height: 42px;
+                Text { x: 32px; width: 260px; height: parent.height; vertical-alignment: center;
+                       text: it.k; font-size: 21px; color: Tema.texto-sec; }
+                Text { x: 300px; width: parent.width - 324px; height: parent.height; vertical-alignment: center;
+                       text: it.v; font-size: 24px; color: Tema.texto; overflow: elide; }
+            }
+        }
         Linha {
-            x: 0; y: 0; width: parent.width; seta: true;
+            x: 0; y: 248px; width: parent.width; seta: true;
             icone: @image-url("icones/info.svg"); titulo: @tr("Sobre o aparelho");
             sub: @tr("Processador, memória, drivers e temperatura");
             tocar => { root.ir("sobre"); }
         }
         Linha {
-            x: 0; y: root.passo; width: parent.width; seta: true;
+            x: 0; y: 248px + root.passo; width: parent.width; seta: true;
             icone: @image-url("icones/restart_alt.svg"); titulo: @tr("Reiniciar");
             tocar => { root.confirmar = "reiniciar"; }
         }
         Linha {
-            x: 0; y: 2 * root.passo; width: parent.width; seta: true; perigo: true;
+            x: 0; y: 248px + 2 * root.passo; width: parent.width; seta: true; perigo: true;
             icone: @image-url("icones/power_settings_new.svg"); titulo: @tr("Desligar");
             tocar => { root.confirmar = "desligar"; }
+        }
+    }
+
+    // ------------------------------------------------------------ Som
+    if root.secao == 1: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Linha {
+            x: 0; y: 0; width: parent.width;
+            icone: @image-url("icones/volume_up.svg"); titulo: @tr("Volume");
+            sub: Math.round(root.volume * 100) + "%";
+            largura-controle: 460px;
+            Slider {
+                x: parent.width - 484px; y: 30px; width: 460px; height: 44px;
+                minimum: 0; maximum: 1.3;
+                value <=> root.volume;
+                value_changed(v) => { root.volume-mudar(v); }
+            }
+        }
+        Linha {
+            x: 0; y: root.passo; width: parent.width; height: 176px;
+            icone: @image-url("icones/bluetooth.svg"); titulo: @tr("Saída de som");
+            sub: @tr("Para onde vai o som quando uma caixa Bluetooth conecta");
+            SegmentedButton {
+                x: 88px; y: 104px; width: parent.width - 112px;
+                current_index: root.saida-som;
+                items: [ { text: @tr("Automático") }, { text: @tr("Sempre o alto-falante") } ];
+                index_changed(i) => { root.saida(i); }
+            }
+        }
+        Linha {
+            x: 0; y: root.passo + 188px; width: parent.width;
+            icone: @image-url("icones/music_note.svg"); titulo: @tr("Testar o som");
+            sub: @tr("Toca um bipe curto na saída atual");
+            largura-controle: 220px;
+            tocar => { root.testar-som(); }
+            OutlineButton {
+                x: parent.width - 220px; y: (parent.height - 64px) / 2; width: 196px; height: 64px;
+                text: @tr("Tocar"); clicked => { root.testar-som(); }
+            }
+        }
+        Text {
+            x: 8px; y: root.passo + 308px; width: parent.width - 16px;
+            text: @tr("As teclas de volume do aparelho também mudam o volume, mesmo com a tela apagada.");
+            font-size: 21px; color: Tema.texto-sec; wrap: word-wrap;
+        }
+    }
+
+    // ------------------------------------------------------------ Bateria
+    if root.secao == 5: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Rectangle {
+            x: 0; y: 0; width: parent.width; height: 220px;
+            border-radius: Tema.raio-m; background: Tema.superficie;
+            // pilha desenhada: contorno + nível
+            Rectangle {
+                x: 40px; y: 62px; width: 200px; height: 96px; border-radius: 14px;
+                border-width: 4px; border-color: Tema.texto-sec;
+                Rectangle {
+                    x: 10px; y: 10px; height: parent.height - 20px; border-radius: 8px;
+                    width: (parent.width - 20px) * max(0, root.bat-pct) / 100;
+                    background: root.bat-pct >= 0 && root.bat-pct < 15 ? Tema.erro
+                              : (root.bat-carregando ? Tema.sucesso : Tema.destaque);
+                }
+            }
+            Rectangle { x: 240px; y: 92px; width: 12px; height: 36px; border-radius: 4px; background: Tema.texto-sec; }
+            Text {
+                x: 290px; y: 40px; text: root.bat-pct >= 0 ? root.bat-pct + "%" : "—";
+                font-size: 84px; font-family: "DejaVu Sans Bold"; color: Tema.texto;
+            }
+            Text {
+                x: 290px; y: 150px; width: parent.width - 314px; text: root.bat-estado;
+                font-size: Tema.texto-corpo; color: root.bat-carregando ? Tema.sucesso : Tema.texto-sec;
+                overflow: elide;
+            }
+        }
+        Linha {
+            x: 0; y: 232px; width: parent.width;
+            icone: @image-url("icones/info.svg"); titulo: @tr("Detalhes");
+            sub: root.bat-detalhe;
+        }
+        Text {
+            x: 8px; y: 356px; width: parent.width - 16px;
+            text: @tr("O percentual é estimado pela tensão da bateria: este aparelho não tem medidor de carga no kernel. Carregando, a estimativa fica mais alta que a real.");
+            font-size: 21px; color: Tema.texto-sec; wrap: word-wrap;
+        }
+    }
+
+    // ------------------------------------------------------------ Data e hora
+    if root.secao == 6: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Rectangle {
+            x: 0; y: 0; width: parent.width; height: 150px;
+            border-radius: Tema.raio-m; background: Tema.superficie;
+            Text { x: 32px; y: 20px; text: root.agora-hora; font-size: 68px;
+                   font-family: "DejaVu Sans Bold"; color: Tema.texto; }
+            Text { x: 32px; y: 104px; width: parent.width - 64px; text: root.agora-data;
+                   font-size: Tema.texto-corpo; color: Tema.texto-sec; overflow: elide; }
+        }
+        Linha {
+            x: 0; y: 162px; width: parent.width; seta: true;
+            icone: @image-url("icones/language.svg"); titulo: @tr("Fuso horário");
+            sub: root.fuso-nome;
+            tocar => { root.lista-fusos = true; }
+        }
+        Linha {
+            x: 0; y: 162px + root.passo; width: parent.width;
+            icone: @image-url("icones/schedule.svg"); titulo: @tr("Formato 24 horas");
+            sub: root.relogio-24h ? "13:30" : "1:30 PM";
+            largura-controle: 110px;
+            tocar => { root.formato-24h(!root.relogio-24h); }
+            Switch {
+                x: parent.width - 110px; y: (parent.height - self.height) / 2;
+                checked: root.relogio-24h;
+                checked_state_changed(c) => { root.formato-24h(c); }
+            }
+        }
+        Linha {
+            x: 0; y: 162px + 2 * root.passo; width: parent.width;
+            icone: @image-url("icones/refresh.svg"); titulo: @tr("Acertar pela internet");
+            sub: root.sincronia;
         }
     }
 
@@ -286,6 +451,31 @@ export component TelaAjustes inherits Rectangle {
             { text: root.idiomas[2], enabled: true },
         ];
         activated(i) => { root.menu-idioma = false; root.idioma(i); }
+    }
+
+    // ------------------------------------------------------------ lista de fusos
+    if root.lista-fusos: Rectangle {
+        background: #00000080;
+        TouchArea { clicked => { root.lista-fusos = false; } }
+        Rectangle {
+            x: (parent.width - 640px) / 2; y: 60px; width: 640px; height: 600px;
+            border-radius: Tema.raio-g; background: Tema.superficie-alta; clip: true;
+            TouchArea { }
+            Text { x: 32px; y: 24px; text: @tr("Fuso horário"); font-size: Tema.texto-titulo;
+                   font-family: "DejaVu Sans Bold"; color: Tema.texto; }
+            Flickable {
+                x: 0; y: 90px; width: parent.width; height: parent.height - 100px;
+                viewport-height: root.fusos.length * 76px;
+                for f[i] in root.fusos: Rectangle {
+                    x: 16px; y: i * 76px; width: parent.width - 32px; height: 72px; border-radius: Tema.raio-p;
+                    background: i == root.fuso-indice ? Tema.destaque-suave : (t.pressed ? Tema.toque : transparent);
+                    Text { x: 24px; width: parent.width - 48px; height: parent.height; vertical-alignment: center;
+                           text: f; font-size: Tema.texto-corpo; overflow: elide;
+                           color: i == root.fuso-indice ? Tema.sobre-destaque-suave : Tema.texto; }
+                    t := TouchArea { clicked => { root.lista-fusos = false; root.fuso(i); } }
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------ confirmação

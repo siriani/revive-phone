@@ -594,6 +594,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     if tela == "cripto" {
         carregar_cripto(ui);
     }
+    if tela == "ajustes" {
+        atualizar_ajustes(ui);
+    }
     if tela == "telegram" {
         return abrir_telegram(ui);
     }
@@ -2222,12 +2225,46 @@ pub fn ligar(ui: &AppWindow) {
         crate::espera::definir_girar(g);
         fg.upgrade().iter().for_each(|ui| ui.set_girar_auto(g));
     });
+    ui.set_aj_fusos(ModelRc::new(VecModel::from(
+        crate::ajustes::FUSOS.iter().map(|(_, n)| ss(n.to_string())).collect::<Vec<_>>(),
+    )));
+    let f = ui.as_weak();
+    ui.on_aj_volume_mudar(|v| {
+        let vol = (v as f64 * 100.0).round().clamp(0.0, 130.0);
+        dados::mpv(serde_json::json!(["set_property", "volume", vol]));
+    });
+    ui.on_aj_saida(move |i| {
+        crate::ajustes::definir_saida_som(i);
+        f.upgrade().iter().for_each(|ui| ui.set_aj_saida_som(i));
+    });
+    ui.on_aj_testar_som(crate::ajustes::testar_som);
+    let f = ui.as_weak();
+    ui.on_aj_fuso(move |i| {
+        crate::ajustes::definir_fuso(i);
+        f.upgrade().iter().for_each(atualizar_ajustes);
+    });
+    let f = ui.as_weak();
+    ui.on_aj_formato_24h(move |v| {
+        crate::ajustes::definir_24h(v);
+        f.upgrade().iter().for_each(atualizar_ajustes);
+    });
+    let f = ui.as_weak();
+    let t = slint::Timer::default();
+    t.start(slint::TimerMode::Repeated, Duration::from_secs(2), move || {
+        if let Some(ui) = f.upgrade() {
+            if ui.get_tela() == "ajustes" && !crate::espera::ativa() {
+                atualizar_ajustes(&ui);
+            }
+        }
+    });
+    std::mem::forget(t);
     ui.on_reiniciar(|| {
         let _ = std::process::Command::new("reboot").spawn();
     });
     ui.on_desligar(|| {
         let _ = std::process::Command::new("poweroff").spawn();
     });
+    let f = ui.as_weak();
     ui.on_ajustes_paleta(move |i| {
         if let Some(ui) = f.upgrade() {
             ui.global::<Tema>().set_paleta(i);
@@ -2280,7 +2317,7 @@ pub fn ligar(ui: &AppWindow) {
         }
         if let Some(ui) = fraca.upgrade() {
             let agora = chrono::Local::now();
-            ui.set_hora(ss(agora.format("%H:%M").to_string()));
+            ui.set_hora(ss(agora.format(crate::ajustes::formato_hora()).to_string()));
             ui.set_data(ss(agora.format("%d/%m/%Y").to_string()));
         }
     };
@@ -2477,4 +2514,77 @@ pub fn ligar(ui: &AppWindow) {
             }
         }
     });
+}
+
+// --------------------------------------------------------------- Ajustes
+
+fn tamanho(b: u64) -> String {
+    let gb = b as f64 / 1e9;
+    if gb >= 1.0 { format!("{gb:.1} GB").replace('.', ",") } else { format!("{:.0} MB", b as f64 / 1e6) }
+}
+
+fn duracao(s: u64) -> String {
+    let (d, h, m) = (s / 86400, s / 3600 % 24, s / 60 % 60);
+    if d > 0 {
+        i18n::tf("{} d {} h", &[&d.to_string(), &h.to_string()])
+    } else if h > 0 {
+        format!("{h} h {m:02} min")
+    } else {
+        format!("{m} min")
+    }
+}
+
+/// Preenche as seções Som, Bateria, Data e hora e Sistema do app Ajustes.
+fn atualizar_ajustes(ui: &AppWindow) {
+    use crate::ajustes as aj;
+    if let Some(v) = dados::mpv(serde_json::json!(["get_property", "volume"])).and_then(|v| v.as_f64()) {
+        ui.set_aj_volume((v / 100.0) as f32);
+    }
+    ui.set_aj_saida_som(aj::saida_som());
+
+    let b = aj::bateria();
+    ui.set_aj_bat_pct(b.pct.unwrap_or(-1));
+    ui.set_aj_bat_carregando(b.carregando);
+    let estado = match (b.carregando, b.cheia, b.fonte) {
+        (_, true, _) => i18n::t("Carregada"),
+        (true, _, "USB") => i18n::t("Carregando pelo USB"),
+        (true, _, _) => i18n::t("Carregando"),
+        (false, _, "") => i18n::t("Na bateria"),
+        (false, _, _) => i18n::t("Conectado, sem carregar"),
+    };
+    ui.set_aj_bat_estado(ss(estado));
+    let mut det = vec![];
+    if let Some(v) = b.tensao {
+        det.push(format!("{v:.2} V").replace('.', ","));
+    }
+    if !b.saude.is_empty() {
+        det.push(match b.saude.as_str() {
+            "Good" => i18n::t("saúde boa"),
+            "Overheat" => i18n::t("quente demais"),
+            o => o.to_lowercase(),
+        });
+    }
+    ui.set_aj_bat_detalhe(ss(det.join(" · ")));
+
+    let agora = chrono::Local::now();
+    ui.set_aj_agora_hora(ss(agora.format(aj::formato_hora()).to_string()));
+    ui.set_aj_agora_data(ss(agora.format("%d/%m/%Y").to_string()));
+    let i = aj::fuso_indice();
+    ui.set_aj_fuso_indice(i);
+    ui.set_aj_fuso_nome(ss(if i >= 0 { aj::FUSOS[i as usize].1.to_string() } else { aj::fuso_atual() }));
+    ui.set_aj_24h(aj::relogio_24h());
+    ui.set_aj_sincronia(ss(match aj::sincronizado() {
+        Some(true) => i18n::t("Sincronizado pela internet"),
+        Some(false) => i18n::t("Ainda não sincronizado (sem internet?)"),
+        None => i18n::t("Serviço de hora (chrony) não encontrado"),
+    }));
+
+    ui.set_aj_versao(ss(aj::versao_revive()));
+    ui.set_aj_so(ss(aj::sistema_operacional()));
+    ui.set_aj_kernel(ss(aj::kernel()));
+    ui.set_aj_ligado(ss(duracao(aj::ligado_ha())));
+    ui.set_aj_armazenamento(ss(match aj::armazenamento() {
+        Some((usado, total)) => i18n::tf("{} usados de {}", &[&tamanho(usado), &tamanho(total)]),
+        None => String::new(),
+    }));
 }

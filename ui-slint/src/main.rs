@@ -5,6 +5,7 @@
 //! pelo evdev. Os serviços (revive-bt, revive-mpv) continuam como antes.
 
 mod app;
+mod ajustes;
 mod brilho;
 mod espera;
 mod camera;

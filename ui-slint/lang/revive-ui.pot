@@ -922,3 +922,99 @@ msgstr "It takes about a minute to come back."
 
 msgid "Para ligar de novo, segure o botão liga/desliga."
 msgstr "To turn it back on, hold the power button."
+
+msgid "Acertar pela internet"
+msgstr ""
+
+msgid "Ainda não sincronizado (sem internet?)"
+msgstr ""
+
+msgid "Armazenamento"
+msgstr ""
+
+msgid "As teclas de volume do aparelho também mudam o volume, mesmo com a tela apagada."
+msgstr ""
+
+msgid "Automático"
+msgstr ""
+
+msgid "Bateria"
+msgstr ""
+
+msgid "Carregada"
+msgstr ""
+
+msgid "Carregando"
+msgstr ""
+
+msgid "Carregando pelo USB"
+msgstr ""
+
+msgid "Conectado, sem carregar"
+msgstr ""
+
+msgid "Contas"
+msgstr ""
+
+msgid "Data e hora"
+msgstr ""
+
+msgid "Detalhes"
+msgstr ""
+
+msgid "Formato 24 horas"
+msgstr ""
+
+msgid "Fuso horário"
+msgstr ""
+
+msgid "Ligado há"
+msgstr ""
+
+msgid "Na bateria"
+msgstr ""
+
+msgid "O percentual é estimado pela tensão da bateria: este aparelho não tem medidor de carga no kernel. Carregando, a estimativa fica mais alta que a real."
+msgstr ""
+
+msgid "Para onde vai o som quando uma caixa Bluetooth conecta"
+msgstr ""
+
+msgid "Saída de som"
+msgstr ""
+
+msgid "Sempre o alto-falante"
+msgstr ""
+
+msgid "Serviço de hora (chrony) não encontrado"
+msgstr ""
+
+msgid "Sincronizado pela internet"
+msgstr ""
+
+msgid "Som"
+msgstr ""
+
+msgid "Testar o som"
+msgstr ""
+
+msgid "Toca um bipe curto na saída atual"
+msgstr ""
+
+msgid "Tocar"
+msgstr ""
+
+msgid "Volume"
+msgstr ""
+
+msgid "quente demais"
+msgstr ""
+
+msgid "saúde boa"
+msgstr ""
+
+msgid "{} d {} h"
+msgstr ""
+
+msgid "{} usados de {}"
+msgstr ""

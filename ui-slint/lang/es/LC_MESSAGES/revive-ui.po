@@ -931,3 +931,99 @@ msgstr "Tarda alrededor de un minuto en volver."
 
 msgid "Para ligar de novo, segure o botão liga/desliga."
 msgstr "Para encenderlo de nuevo, mantén pulsado el botón de encendido."
+
+msgid "Acertar pela internet"
+msgstr "Ajuste automático"
+
+msgid "Ainda não sincronizado (sem internet?)"
+msgstr "Aún no sincronizado (¿sin internet?)"
+
+msgid "Armazenamento"
+msgstr "Almacenamiento"
+
+msgid "As teclas de volume do aparelho também mudam o volume, mesmo com a tela apagada."
+msgstr "Las teclas de volumen del dispositivo también cambian el volumen, incluso con la pantalla apagada."
+
+msgid "Automático"
+msgstr "Automático"
+
+msgid "Bateria"
+msgstr "Batería"
+
+msgid "Carregada"
+msgstr "Cargada"
+
+msgid "Carregando"
+msgstr "Cargando"
+
+msgid "Carregando pelo USB"
+msgstr "Cargando por USB"
+
+msgid "Conectado, sem carregar"
+msgstr "Conectado, sin cargar"
+
+msgid "Contas"
+msgstr "Cuentas"
+
+msgid "Data e hora"
+msgstr "Fecha y hora"
+
+msgid "Detalhes"
+msgstr "Detalles"
+
+msgid "Formato 24 horas"
+msgstr "Formato de 24 horas"
+
+msgid "Fuso horário"
+msgstr "Zona horaria"
+
+msgid "Ligado há"
+msgstr "Encendido hace"
+
+msgid "Na bateria"
+msgstr "Con batería"
+
+msgid "O percentual é estimado pela tensão da bateria: este aparelho não tem medidor de carga no kernel. Carregando, a estimativa fica mais alta que a real."
+msgstr "El porcentaje se estima por la tensión de la batería: este dispositivo no tiene medidor de carga en el kernel. Mientras carga, la estimación queda más alta que la real."
+
+msgid "Para onde vai o som quando uma caixa Bluetooth conecta"
+msgstr "Adónde va el sonido cuando se conecta un altavoz Bluetooth"
+
+msgid "Saída de som"
+msgstr "Salida de sonido"
+
+msgid "Sempre o alto-falante"
+msgstr "Siempre el altavoz"
+
+msgid "Serviço de hora (chrony) não encontrado"
+msgstr "Servicio de hora (chrony) no encontrado"
+
+msgid "Sincronizado pela internet"
+msgstr "Sincronizado por internet"
+
+msgid "Som"
+msgstr "Sonido"
+
+msgid "Testar o som"
+msgstr "Probar el sonido"
+
+msgid "Toca um bipe curto na saída atual"
+msgstr "Reproduce un pitido corto en la salida actual"
+
+msgid "Tocar"
+msgstr "Reproducir"
+
+msgid "Volume"
+msgstr "Volumen"
+
+msgid "quente demais"
+msgstr "sobrecalentada"
+
+msgid "saúde boa"
+msgstr "buena salud"
+
+msgid "{} d {} h"
+msgstr "{} d {} h"
+
+msgid "{} usados de {}"
+msgstr "{} usados de {}"
