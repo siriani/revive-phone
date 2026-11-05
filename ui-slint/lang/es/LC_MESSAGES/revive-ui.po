@@ -847,3 +847,87 @@ msgstr "Sistema"
 
 msgid "Módulos-chave"
 msgstr "Módulos clave"
+
+msgid "1 min"
+msgstr "1 min"
+
+msgid "2 min"
+msgstr "2 min"
+
+msgid "5 min"
+msgstr "5 min"
+
+msgid "10 min"
+msgstr "10 min"
+
+msgid "Nunca"
+msgstr "Nunca"
+
+msgid "Apagar a tela"
+msgstr "Apagar pantalla"
+
+msgid "Depois de quanto tempo sem toque"
+msgstr "Después de cuánto tiempo sin tocar"
+
+msgid "Girar a tela sozinho"
+msgstr "Girar pantalla automáticamente"
+
+msgid "Segue o lado em que o aparelho está deitado"
+msgstr "Sigue el lado en el que está apoyado el dispositivo"
+
+msgid "Fica na posição atual"
+msgstr "Se queda en la posición actual"
+
+msgid "O botão liga/desliga apaga e acende a tela. Apagada, a música continua tocando."
+msgstr "El botón de encendido apaga y enciende la pantalla. Apagada, la música sigue sonando."
+
+msgid "Tela"
+msgstr "Pantalla"
+
+msgid "Tema"
+msgstr "Tema"
+
+msgid "Cores"
+msgstr "Colores"
+
+msgid "Conexões"
+msgstr "Conexiones"
+
+msgid "Serviços"
+msgstr "Servicios"
+
+msgid "Música (Navidrome)"
+msgstr "Música (Navidrome)"
+
+msgid "Endereço, usuário e senha do servidor"
+msgstr "Dirección, usuario y contraseña del servidor"
+
+msgid "Conta e conversas"
+msgstr "Cuenta y conversaciones"
+
+msgid "Nós por perto e mensagens"
+msgstr "Nodos cercanos y mensajes"
+
+msgid "Sobre o aparelho"
+msgstr "Acerca del dispositivo"
+
+msgid "Processador, memória, drivers e temperatura"
+msgstr "Procesador, memoria, drivers y temperatura"
+
+msgid "Reiniciar"
+msgstr "Reiniciar"
+
+msgid "Reiniciar o aparelho?"
+msgstr "¿Reiniciar el dispositivo?"
+
+msgid "Desligar"
+msgstr "Apagar"
+
+msgid "Desligar o aparelho?"
+msgstr "¿Apagar el dispositivo?"
+
+msgid "Leva cerca de um minuto para voltar."
+msgstr "Tarda alrededor de un minuto en volver."
+
+msgid "Para ligar de novo, segure o botão liga/desliga."
+msgstr "Para encenderlo de nuevo, mantén pulsado el botón de encendido."

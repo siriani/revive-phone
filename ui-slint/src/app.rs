@@ -2214,6 +2214,20 @@ pub fn ligar(ui: &AppWindow) {
             crate::doom::reiniciar();
         }
     });
+    ui.set_apagar_indice(crate::espera::apagar_indice());
+    ui.on_ajustes_apagar(move |i| crate::espera::definir_apagar(i));
+    ui.set_girar_auto(crate::espera::girar_auto());
+    let fg = ui.as_weak();
+    ui.on_ajustes_girar(move |g| {
+        crate::espera::definir_girar(g);
+        fg.upgrade().iter().for_each(|ui| ui.set_girar_auto(g));
+    });
+    ui.on_reiniciar(|| {
+        let _ = std::process::Command::new("reboot").spawn();
+    });
+    ui.on_desligar(|| {
+        let _ = std::process::Command::new("poweroff").spawn();
+    });
     ui.on_ajustes_paleta(move |i| {
         if let Some(ui) = f.upgrade() {
             ui.global::<Tema>().set_paleta(i);

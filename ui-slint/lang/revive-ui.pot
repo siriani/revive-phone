@@ -838,3 +838,87 @@ msgstr ""
 
 msgid "Módulos-chave"
 msgstr ""
+
+msgid "1 min"
+msgstr "1 min"
+
+msgid "2 min"
+msgstr "2 min"
+
+msgid "5 min"
+msgstr "5 min"
+
+msgid "10 min"
+msgstr "10 min"
+
+msgid "Nunca"
+msgstr "Never"
+
+msgid "Apagar a tela"
+msgstr "Screen timeout"
+
+msgid "Depois de quanto tempo sem toque"
+msgstr "After how long without touch"
+
+msgid "Girar a tela sozinho"
+msgstr "Auto-rotate screen"
+
+msgid "Segue o lado em que o aparelho está deitado"
+msgstr "Follows the side the device is resting on"
+
+msgid "Fica na posição atual"
+msgstr "Stays in the current position"
+
+msgid "O botão liga/desliga apaga e acende a tela. Apagada, a música continua tocando."
+msgstr "The power button turns the screen off and on. When off, music keeps playing."
+
+msgid "Tela"
+msgstr "Display"
+
+msgid "Tema"
+msgstr "Theme"
+
+msgid "Cores"
+msgstr "Colors"
+
+msgid "Conexões"
+msgstr "Connections"
+
+msgid "Serviços"
+msgstr "Services"
+
+msgid "Música (Navidrome)"
+msgstr "Music (Navidrome)"
+
+msgid "Endereço, usuário e senha do servidor"
+msgstr "Server address, user and password"
+
+msgid "Conta e conversas"
+msgstr "Account and chats"
+
+msgid "Nós por perto e mensagens"
+msgstr "Nearby nodes and messages"
+
+msgid "Sobre o aparelho"
+msgstr "About the device"
+
+msgid "Processador, memória, drivers e temperatura"
+msgstr "Processor, memory, drivers and temperature"
+
+msgid "Reiniciar"
+msgstr "Restart"
+
+msgid "Reiniciar o aparelho?"
+msgstr "Restart the device?"
+
+msgid "Desligar"
+msgstr "Power off"
+
+msgid "Desligar o aparelho?"
+msgstr "Power off the device?"
+
+msgid "Leva cerca de um minuto para voltar."
+msgstr "It takes about a minute to come back."
+
+msgid "Para ligar de novo, segure o botão liga/desliga."
+msgstr "To turn it back on, hold the power button."

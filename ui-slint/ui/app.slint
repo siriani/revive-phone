@@ -31,6 +31,7 @@ import { TelaTocandoMat, TelaFila, RailMusica, FilaItem, Album, MusicaInicioMat,
 import { PainelMat, HoraClima, MoedaMini } from "painel_ui.slint";
 import { TelaClima, TelaCidade, HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 import { TelaLoja, TelaAppLoja, AppLojaUi } from "loja_ui.slint";
+import { TelaAjustes } from "ajustes_ui.slint";
 import { TelaMesh, NoMesh, MsgMesh } from "mesh_ui.slint";
 import { TelaSobre, SecaoSobre, ItemSobre } from "sobre_ui.slint";
 import { TelaCamera, TelaGaleria, FotoUi } from "camera_ui.slint";
@@ -754,122 +755,6 @@ component TelaFoto inherits Rectangle {
     }
 }
 
-// ------------------------------------------------------------------ ajustes
-
-component CartaoOpcao inherits Rectangle {
-    in property <string> titulo;
-    in property <string> sub;
-    in property <image> icone;
-    in property <bool> ativo;
-    callback escolher();
-    border-radius: Tema.raio-g;
-    background: toque.pressed ? Tema.superficie-alta : (ativo ? Tema.destaque-suave : Tema.superficie);
-    border-width: ativo ? 3px : 1px;
-    border-color: ativo ? Tema.destaque : Tema.contorno;
-    Image { x: 32px; y: 32px; width: 72px; height: 72px; source: root.icone;
-            colorize: root.ativo ? Tema.sobre-destaque-suave : Tema.texto; }
-    Text { x: 32px; y: 124px; text: root.titulo; font-size: Tema.texto-titulo; font-family: "DejaVu Sans Bold";
-           color: root.ativo ? Tema.sobre-destaque-suave : Tema.texto; }
-    Text { x: 32px; y: 172px; width: parent.width - 64px; text: root.sub; font-size: Tema.texto-corpo;
-           color: Tema.texto-sec; wrap: word-wrap; }
-    if root.ativo: Rectangle {
-        x: parent.width - 76px; y: 28px; width: 48px; height: 48px; border-radius: 24px; background: Tema.destaque;
-        Image { width: 32px; height: 32px; source: @image-url("icones/check.svg"); colorize: Tema.sobre-destaque; }
-    }
-    toque := TouchArea { clicked => { root.escolher(); } }
-}
-
-component TelaAjustes inherits Rectangle {
-    callback voltar();
-    callback tema(bool);
-    callback paleta(int);
-    callback organizar();
-    callback idioma(int);
-    in property <int> idioma-atual;
-    // brilho da tela (0..1), só aparece se o aparelho tiver backlight
-    in-out property <float> brilho: 1.0;
-    in property <bool> brilho-disponivel: true;
-    callback brilho-mudar(float);
-    property <bool> menu-aberto;
-    property <bool> idioma-aberto;
-    property <[string]> idiomas: ["Português", "English", "Español"];
-    background: Tema.fundo;
-    BarraApp { titulo: @tr("Ajustes"); voltar => { root.voltar(); } }
-    // como na galeria do Material: paleta (esquemas de cor) e sol/lua (claro/escuro)
-    IconButton {
-        x: 1080px; y: 18px; icon: @image-url("icones/palette.svg");
-        clicked => { root.menu-aberto = !root.menu-aberto; }
-    }
-    IconButton {
-        x: 1170px; y: 18px;
-        icon: Tema.escuro ? @image-url("icones/light_mode.svg") : @image-url("icones/dark_mode.svg");
-        clicked => { root.tema(!Tema.escuro); }
-    }
-    Text { x: 48px; y: 120px; text: @tr("Aparência"); font-size: Tema.texto-titulo; color: Tema.destaque;
-           font-family: "DejaVu Sans Bold"; }
-    // brilho: faixa ao lado do título, acima dos cartões
-    if root.brilho-disponivel: Rectangle {
-        x: 300px; y: 106px; width: 932px; height: 68px; border-radius: 18px;
-        background: Tema.superficie;
-        Text { x: 24px; y: 0px; width: 140px; height: parent.height; text: @tr("Brilho"); overflow: elide;
-               font-size: Tema.texto-corpo; color: Tema.texto-sec; vertical-alignment: center; }
-        Slider {
-            x: 172px; y: 12px; width: parent.width - 196px; height: 44px;
-            enabled: true;
-            minimum: 0.01;
-            maximum: 1;
-            value <=> root.brilho;
-            value_changed(v) => { root.brilho-mudar(v); }
-        }
-    }
-    CartaoOpcao {
-        x: 48px; y: 180px; width: 580px; height: 260px;
-        titulo: @tr("Escuro"); sub: @tr("Fundo escuro, confortável à noite e mais econômico.");
-        icone: @image-url("icones/dark_mode.svg"); ativo: Tema.escuro;
-        escolher => { root.tema(true); }
-    }
-    CartaoOpcao {
-        x: 652px; y: 180px; width: 580px; height: 260px;
-        titulo: @tr("Claro"); sub: @tr("Fundo claro, melhor de dia e em lugares iluminados.");
-        icone: @image-url("icones/light_mode.svg"); ativo: !Tema.escuro;
-        escolher => { root.tema(false); }
-    }
-    CartaoOpcao {
-        x: 48px; y: 465px; width: 580px; height: 235px;
-        titulo: @tr("Tela inicial"); sub: @tr("Escolha quais apps aparecem e em que ordem.");
-        icone: @image-url("icones/edit.svg"); ativo: false;
-        escolher => { root.organizar(); }
-    }
-    CartaoOpcao {
-        x: 652px; y: 465px; width: 580px; height: 235px;
-        titulo: @tr("Idioma"); sub: root.idiomas[root.idioma-atual];
-        icone: @image-url("icones/language.svg"); ativo: false;
-        escolher => { root.idioma-aberto = true; }
-    }
-    if root.idioma-aberto: TouchArea { clicked => { root.idioma-aberto = false; } }
-    if root.idioma-aberto: MenuInner {
-        x: 852px; y: 300px; width: 380px;
-        current_index: root.idioma-atual;
-        items: [
-            { text: root.idiomas[0], enabled: true }, { text: root.idiomas[1], enabled: true },
-            { text: root.idiomas[2], enabled: true },
-        ];
-        activated(i) => { root.idioma-aberto = false; root.idioma(i); }
-    }
-    // menu de esquemas de cor (MenuInner da biblioteca, sem janela popup)
-    if root.menu-aberto: TouchArea { clicked => { root.menu-aberto = false; } }
-    if root.menu-aberto: MenuInner {
-        x: 860px; y: 100px; width: 380px;
-        current_index: Tema.paleta;
-        items: [
-            { text: Esquemas.nomes[0], enabled: true }, { text: Esquemas.nomes[1], enabled: true },
-            { text: Esquemas.nomes[2], enabled: true }, { text: Esquemas.nomes[3], enabled: true },
-            { text: Esquemas.nomes[4], enabled: true }, { text: Esquemas.nomes[5], enabled: true },
-        ];
-        activated(i) => { root.menu-aberto = false; root.paleta(i); }
-    }
-}
-
 // ------------------------------------------------- configuração do Navidrome
 
 component TelaConfMusica inherits Rectangle {
@@ -1038,6 +923,13 @@ export component AppWindow inherits Window {
     callback ajustes-tema(bool);
     callback ajustes-paleta(int);
     callback ajustes-idioma(int);
+    // Ajustes > Tela: apagar sozinho (0..4 = 1, 2, 5, 10 min, nunca) e girar pelo acelerômetro
+    in property <int> apagar-indice: 1;
+    callback ajustes-apagar(int);
+    in property <bool> girar-auto: true;
+    callback ajustes-girar(bool);
+    callback reiniciar();
+    callback desligar();
     in property <int> idioma-atual;
     in-out property <float> brilho: 1.0;
     in property <bool> brilho-disponivel: true;
@@ -1261,10 +1153,19 @@ export component AppWindow inherits Window {
             paleta(i) => { root.ajustes-paleta(i); }
             idioma-atual: root.idioma-atual;
             idioma(i) => { root.ajustes-idioma(i); }
-            organizar => { root.ir("organizar"); }
+            ir(t) => { root.ir(t); }
             brilho <=> root.brilho;
             brilho-disponivel: root.brilho-disponivel;
             brilho-mudar(v) => { root.brilho-mudar(v); }
+            apagar-indice: root.apagar-indice;
+            apagar(i) => { root.ajustes-apagar(i); }
+            girar-auto: root.girar-auto;
+            girar(g) => { root.ajustes-girar(g); }
+            wifi-ok: root.wifi-ok;
+            wifi-ssid: root.wifi-ssid;
+            bt-resumo: root.bt-conectados;
+            reiniciar => { root.reiniciar(); }
+            desligar => { root.desligar(); }
         }
         if root.tela == "clima": TelaClima {
             width: 1280px; height: 720px;

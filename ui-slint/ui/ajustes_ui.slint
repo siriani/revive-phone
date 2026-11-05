@@ -1,0 +1,325 @@
+// App Ajustes: categorias numa coluna à esquerda (paisagem) e as opções à direita.
+// Tudo o que é preferência do aparelho mora aqui; as telas de cada serviço (Wi-Fi,
+// Bluetooth, Navidrome, Telegram, Meshtastic) são abertas a partir da seção certa.
+
+import { AppBar, SegmentedButton, Slider, Switch, FilledButton, OutlineButton } from "@material";
+import { MenuInner } from "../material/ui/components/menu.slint";
+import { Tema } from "tema.slint";
+import { Esquemas } from "esquemas.slint";
+
+// item da coluna de categorias
+component Categoria inherits Rectangle {
+    in property <image> icone;
+    in property <string> titulo;
+    in property <bool> ativo;
+    callback escolher();
+    height: 76px;
+    border-radius: 38px;
+    background: ativo ? Tema.destaque-suave : (toque.pressed ? Tema.toque : transparent);
+    Image { x: 24px; y: (parent.height - 36px) / 2; width: 36px; height: 36px; source: root.icone;
+            colorize: root.ativo ? Tema.sobre-destaque-suave : Tema.texto-sec; }
+    Text { x: 80px; width: parent.width - 96px; height: parent.height; vertical-alignment: center;
+           text: root.titulo; font-size: Tema.texto-corpo; overflow: elide;
+           font-family: root.ativo ? "DejaVu Sans Bold" : "DejaVu Sans";
+           color: root.ativo ? Tema.sobre-destaque-suave : Tema.texto; }
+    toque := TouchArea { clicked => { root.escolher(); } }
+}
+
+// linha de opção: ícone, título, explicação e um controle (ou seta) à direita
+component Linha inherits Rectangle {
+    in property <image> icone;
+    in property <string> titulo;
+    in property <string> sub;
+    in property <bool> seta;          // abre outra tela ou um menu
+    in property <length> largura-controle: 0px;
+    in property <bool> perigo;        // reiniciar/desligar
+    callback tocar();
+    height: 104px;
+    border-radius: Tema.raio-m;
+    background: toque.pressed && root.seta ? Tema.superficie-alta : Tema.superficie;
+    toque := TouchArea { clicked => { root.tocar(); } }
+    Image { x: 24px; y: (parent.height - 40px) / 2; width: 40px; height: 40px; source: root.icone;
+            colorize: root.perigo ? Tema.erro : Tema.destaque; }
+    property <length> texto-largura: root.width - 96px - root.largura-controle - (root.seta ? 72px : 24px);
+    Text { x: 88px; y: root.sub == "" ? 0px : 18px; width: root.texto-largura;
+           height: root.sub == "" ? parent.height : 34px; vertical-alignment: center;
+           text: root.titulo; font-size: Tema.texto-corpo; font-family: "DejaVu Sans Bold";
+           color: root.perigo ? Tema.erro : Tema.texto; overflow: elide; }
+    if root.sub != "": Text {
+        x: 88px; y: 56px; width: root.texto-largura; height: 30px;
+        text: root.sub; font-size: 21px; color: Tema.texto-sec; overflow: elide;
+    }
+    if root.seta: Image {
+        x: parent.width - 60px; y: (parent.height - 36px) / 2; width: 36px; height: 36px;
+        source: @image-url("icones/chevron_right.svg"); colorize: Tema.texto-sec;
+    }
+    @children
+}
+
+export component TelaAjustes inherits Rectangle {
+    callback voltar();
+    callback ir(string);
+
+    // Tela
+    in-out property <float> brilho: 1.0;
+    in property <bool> brilho-disponivel: true;
+    callback brilho-mudar(float);
+    in property <int> apagar-indice: 1;     // 0..4 = 1, 2, 5, 10 min, nunca
+    callback apagar(int);
+    in property <bool> girar-auto: true;
+    callback girar(bool);
+
+    // Aparência
+    callback tema(bool);
+    callback paleta(int);
+    callback idioma(int);
+    in property <int> idioma-atual;
+
+    // Conexões e serviços (resumos que o Rust já mantém)
+    in property <bool> wifi-ok;
+    in property <string> wifi-ssid;
+    in property <string> bt-resumo;
+
+    // Sistema
+    callback reiniciar();
+    callback desligar();
+
+    in-out property <int> secao: 0;
+    property <bool> menu-cores;
+    property <bool> menu-idioma;
+    property <string> confirmar;            // "", "reiniciar" ou "desligar"
+    property <[string]> idiomas: ["Português", "English", "Español"];
+
+    background: Tema.fundo;
+    AppBar {
+        x: 0; y: 0; width: parent.width;
+        title: @tr("Ajustes");
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+
+    // ------------------------------------------------------------ categorias
+    property <[{icone: image, titulo: string}]> categorias: [
+        { icone: @image-url("icones/smartphone.svg"), titulo: @tr("Tela") },
+        { icone: @image-url("icones/palette.svg"), titulo: @tr("Aparência") },
+        { icone: @image-url("icones/wifi.svg"), titulo: @tr("Conexões") },
+        { icone: @image-url("icones/hub.svg"), titulo: @tr("Serviços") },
+        { icone: @image-url("icones/info.svg"), titulo: @tr("Sistema") },
+    ];
+    for c[i] in root.categorias: Categoria {
+        x: 24px; y: 116px + i * 88px; width: 340px;
+        icone: c.icone; titulo: c.titulo; ativo: root.secao == i;
+        escolher => { root.secao = i; root.menu-cores = false; root.menu-idioma = false; }
+    }
+
+    property <length> px: 392px;              // início da coluna de opções
+    property <length> lw: 1280px - 392px - 24px;
+    property <length> passo: 116px;
+
+    // ------------------------------------------------------------ Tela
+    if root.secao == 0: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        if root.brilho-disponivel: Linha {
+            x: 0; y: 0; width: parent.width;
+            icone: @image-url("icones/light_mode.svg"); titulo: @tr("Brilho");
+            largura-controle: 460px;
+            Slider {
+                x: parent.width - 484px; y: 30px; width: 460px; height: 44px;
+                minimum: 0.01; maximum: 1;
+                value <=> root.brilho;
+                value_changed(v) => { root.brilho-mudar(v); }
+            }
+        }
+        Linha {
+            x: 0; y: root.brilho-disponivel ? root.passo : 0; width: parent.width; height: 176px;
+            icone: @image-url("icones/timer.svg"); titulo: @tr("Apagar a tela");
+            sub: @tr("Depois de quanto tempo sem toque");
+            SegmentedButton {
+                x: 88px; y: 104px; width: parent.width - 112px;
+                current_index: root.apagar-indice;
+                items: [
+                    { text: @tr("1 min") }, { text: @tr("2 min") }, { text: @tr("5 min") },
+                    { text: @tr("10 min") }, { text: @tr("Nunca") },
+                ];
+                index_changed(i) => { root.apagar(i); }
+            }
+        }
+        Linha {
+            x: 0; y: (root.brilho-disponivel ? root.passo : 0) + 188px; width: parent.width;
+            icone: @image-url("icones/screen_rotation.svg"); titulo: @tr("Girar a tela sozinho");
+            sub: root.girar-auto ? @tr("Segue o lado em que o aparelho está deitado")
+                                 : @tr("Fica na posição atual");
+            largura-controle: 110px;
+            tocar => { root.girar(!root.girar-auto); }
+            Switch {
+                x: parent.width - 110px; y: (parent.height - self.height) / 2;
+                checked: root.girar-auto;
+                checked_state_changed(c) => { root.girar(c); }
+            }
+        }
+        Text {
+            x: 8px; y: 432px; width: parent.width - 16px;
+            text: @tr("O botão liga/desliga apaga e acende a tela. Apagada, a música continua tocando.");
+            font-size: 21px; color: Tema.texto-sec; wrap: word-wrap;
+        }
+    }
+
+    // ------------------------------------------------------------ Aparência
+    if root.secao == 1: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Linha {
+            x: 0; y: 0; width: parent.width;
+            icone: Tema.escuro ? @image-url("icones/dark_mode.svg") : @image-url("icones/light_mode.svg");
+            titulo: @tr("Tema");
+            largura-controle: 380px;
+            SegmentedButton {
+                x: parent.width - 404px; y: (parent.height - self.height) / 2; width: 380px;
+                current_index: Tema.escuro ? 0 : 1;
+                items: [
+                    { icon: @image-url("icones/dark_mode.svg"), text: @tr("Escuro") },
+                    { icon: @image-url("icones/light_mode.svg"), text: @tr("Claro") },
+                ];
+                index_changed(i) => { root.tema(i == 0); }
+            }
+        }
+        Linha {
+            x: 0; y: root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/palette.svg"); titulo: @tr("Cores");
+            sub: Esquemas.nomes[Tema.paleta];
+            tocar => { root.menu-cores = true; }
+        }
+        Linha {
+            x: 0; y: 2 * root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/language.svg"); titulo: @tr("Idioma");
+            sub: root.idiomas[root.idioma-atual];
+            tocar => { root.menu-idioma = true; }
+        }
+        Linha {
+            x: 0; y: 3 * root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/home.svg"); titulo: @tr("Tela inicial");
+            sub: @tr("Escolha quais apps aparecem e em que ordem.");
+            tocar => { root.ir("organizar"); }
+        }
+    }
+
+    // ------------------------------------------------------------ Conexões
+    if root.secao == 2: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Linha {
+            x: 0; y: 0; width: parent.width; seta: true;
+            icone: root.wifi-ok ? @image-url("icones/wifi.svg") : @image-url("icones/wifi_off.svg");
+            titulo: "Wi-Fi";
+            sub: root.wifi-ok ? root.wifi-ssid : @tr("desconectado");
+            tocar => { root.ir("wifi"); }
+        }
+        Linha {
+            x: 0; y: root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/bluetooth.svg"); titulo: "Bluetooth";
+            sub: root.bt-resumo;
+            tocar => { root.ir("bt"); }
+        }
+    }
+
+    // ------------------------------------------------------------ Serviços
+    if root.secao == 3: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Linha {
+            x: 0; y: 0; width: parent.width; seta: true;
+            icone: @image-url("icones/library_music.svg"); titulo: @tr("Música (Navidrome)");
+            sub: @tr("Endereço, usuário e senha do servidor");
+            tocar => { root.ir("musica-conf"); }
+        }
+        Linha {
+            x: 0; y: root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/chat.svg"); titulo: "Telegram";
+            sub: @tr("Conta e conversas");
+            tocar => { root.ir("telegram"); }
+        }
+        Linha {
+            x: 0; y: 2 * root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/hub.svg"); titulo: "Meshtastic";
+            sub: @tr("Nós por perto e mensagens");
+            tocar => { root.ir("mesh"); }
+        }
+    }
+
+    // ------------------------------------------------------------ Sistema
+    if root.secao == 4: Rectangle {
+        x: root.px; y: 116px; width: root.lw; height: 600px;
+        Linha {
+            x: 0; y: 0; width: parent.width; seta: true;
+            icone: @image-url("icones/info.svg"); titulo: @tr("Sobre o aparelho");
+            sub: @tr("Processador, memória, drivers e temperatura");
+            tocar => { root.ir("sobre"); }
+        }
+        Linha {
+            x: 0; y: root.passo; width: parent.width; seta: true;
+            icone: @image-url("icones/restart_alt.svg"); titulo: @tr("Reiniciar");
+            tocar => { root.confirmar = "reiniciar"; }
+        }
+        Linha {
+            x: 0; y: 2 * root.passo; width: parent.width; seta: true; perigo: true;
+            icone: @image-url("icones/power_settings_new.svg"); titulo: @tr("Desligar");
+            tocar => { root.confirmar = "desligar"; }
+        }
+    }
+
+    // ------------------------------------------------------------ menus
+    if root.menu-cores || root.menu-idioma: TouchArea {
+        clicked => { root.menu-cores = false; root.menu-idioma = false; }
+    }
+    if root.menu-cores: MenuInner {
+        x: 1280px - 24px - 400px; y: 116px + root.passo; width: 400px;
+        current_index: Tema.paleta;
+        items: [
+            { text: Esquemas.nomes[0], enabled: true }, { text: Esquemas.nomes[1], enabled: true },
+            { text: Esquemas.nomes[2], enabled: true }, { text: Esquemas.nomes[3], enabled: true },
+            { text: Esquemas.nomes[4], enabled: true }, { text: Esquemas.nomes[5], enabled: true },
+        ];
+        activated(i) => { root.menu-cores = false; root.paleta(i); }
+    }
+    if root.menu-idioma: MenuInner {
+        x: 1280px - 24px - 400px; y: 116px + 2 * root.passo; width: 400px;
+        current_index: root.idioma-atual;
+        items: [
+            { text: root.idiomas[0], enabled: true }, { text: root.idiomas[1], enabled: true },
+            { text: root.idiomas[2], enabled: true },
+        ];
+        activated(i) => { root.menu-idioma = false; root.idioma(i); }
+    }
+
+    // ------------------------------------------------------------ confirmação
+    if root.confirmar != "": Rectangle {
+        background: #000000a0;
+        TouchArea { clicked => { root.confirmar = ""; } }
+        Rectangle {
+            x: (parent.width - 640px) / 2; y: 200px; width: 640px; height: 300px;
+            border-radius: Tema.raio-g; background: Tema.superficie-alta;
+            TouchArea { }
+            Text {
+                x: 40px; y: 36px; width: parent.width - 80px;
+                text: root.confirmar == "desligar" ? @tr("Desligar o aparelho?") : @tr("Reiniciar o aparelho?");
+                font-size: Tema.texto-titulo; font-family: "DejaVu Sans Bold"; color: Tema.texto;
+            }
+            Text {
+                x: 40px; y: 100px; width: parent.width - 80px;
+                text: root.confirmar == "desligar"
+                    ? @tr("Para ligar de novo, segure o botão liga/desliga.")
+                    : @tr("Leva cerca de um minuto para voltar.");
+                font-size: Tema.texto-corpo; color: Tema.texto-sec; wrap: word-wrap;
+            }
+            OutlineButton {
+                x: parent.width - 520px; y: 196px; width: 220px; height: 72px; text: @tr("Cancelar");
+                clicked => { root.confirmar = ""; }
+            }
+            FilledButton {
+                x: parent.width - 280px; y: 196px; width: 240px; height: 72px;
+                text: root.confirmar == "desligar" ? @tr("Desligar") : @tr("Reiniciar");
+                clicked => {
+                    if root.confirmar == "desligar" { root.desligar(); } else { root.reiniciar(); }
+                    root.confirmar = "";
+                }
+            }
+        }
+    }
+}

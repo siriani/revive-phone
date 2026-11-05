@@ -123,6 +123,7 @@ fn main() {
         eprintln!("idioma {}: {e:?}", i18n::idioma());
     }
     brilho::restaurar();
+    espera::restaurar();
     app::ligar(&ui);
     ui.show().unwrap();
 
@@ -135,6 +136,10 @@ fn main() {
             let mut votos = 0;
             let mut ultimo = None;
             loop {
+                // com o giro automático desligado a tela fica onde está
+                while !espera::girar_auto() {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
                 let r = rotacao_acelerometro();
                 if r.is_some() && r == ultimo {
                     votos += 1;
@@ -171,6 +176,8 @@ fn main() {
     };
     // botão liga/desliga: tela apagada não desenha nem aceita toque
     let mut apagada = false;
+    // último toque/tecla: a tela apaga sozinha depois do tempo escolhido em Ajustes
+    let mut ultima_atividade = Instant::now();
     loop {
         // O DOOM roda como app, desenhando direto no framebuffer: aqui só se espera.
         // A entrada é lida pelo jogo, então nada é despachado para a interface.
@@ -264,6 +271,7 @@ fn main() {
                 espera::entrar();
             } else {
                 espera::sair();
+                ultima_atividade = Instant::now();
                 tela.redesenhar_tudo = true;
                 janela.request_redraw();
             }
@@ -278,6 +286,18 @@ fn main() {
         ui.set_mouse_x(entrada.mx);
         ui.set_mouse_y(entrada.my);
 
+        if houve_entrada {
+            ultima_atividade = Instant::now();
+        }
+        // apaga sozinha sem toque (não na câmera, que é usada olhando a tela)
+        if !apagada
+            && espera::tempo_apagar().is_some_and(|t| ultima_atividade.elapsed() >= t)
+            && ui.get_tela() != "camera"
+        {
+            apagada = true;
+            boost_ate = None;
+            espera::entrar();
+        }
         if houve_entrada && !apagada {
             if boost_ate.is_none() {
                 cpu_min(true);
