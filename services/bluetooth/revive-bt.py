@@ -79,8 +79,9 @@ def pin_mesh(mac):
                     pin = valor
     except OSError:
         return None
-    if ble == mac.upper():
-        return pin or "123456"  # PIN padrão do Meshtastic
+    # sem pin= o nó está no modo PIN aleatório: o número é pedido na tela (RequestPasskey)
+    if ble == mac.upper() and pin:
+        return pin
     return None
 
 
@@ -191,18 +192,20 @@ class Agente(dbus.service.Object):
         self.bt.prompt = {"texto": f"Digite {pin} no {self.nome(path)} e aperte Enter", "codigo": str(pin)}
         self.bt.salvar()
 
-    @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="u")
-    def RequestPasskey(self, path):
+    @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="u",
+                         async_callbacks=("responder", "recusar"))
+    def RequestPasskey(self, path, responder, recusar):
+        """O outro aparelho MOSTRA um número (ex.: nó Meshtastic com PIN aleatório no OLED)
+        e o Revive precisa digitá-lo. Com pin= fixo no mesh.conf responde na hora; senão
+        pede o número na tela e espera a resposta (comando "pin NNNNNN") por até 30 s, que
+        é o tempo do pareamento: enquanto isso o nó mantém o PIN na tela dele."""
         mac = mac_do_path(path)
         fixo = pin_mesh(mac)
         if fixo and fixo.isdigit():
             log(f"agente: passkey do mesh.conf para {mac}")
-            return dbus.UInt32(int(fixo))
-        chave = random.randint(0, 999999)
-        self.bt.prompt = {"texto": f"Digite {chave:06d} no {self.nome(path)} e aperte Enter",
-                          "codigo": f"{chave:06d}"}
-        self.bt.salvar()
-        return dbus.UInt32(chave)
+            responder(dbus.UInt32(int(fixo)))
+            return
+        self.bt.esperando_pin(self.nome(path), responder, recusar)
 
     @dbus.service.method("org.bluez.Agent1", in_signature="ouq", out_signature="")
     def DisplayPasskey(self, path, chave, digitados):
@@ -225,6 +228,7 @@ class Agente(dbus.service.Object):
 
     @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
     def Cancel(self):
+        self.bt.pin_resposta(None)
         self.bt.prompt = None
         self.bt.salvar()
 
@@ -239,6 +243,7 @@ class Bluetooth:
         self.scan_fim = 0
         self.prompt = None
         self.msg = ""
+        self.pin_pendente = None  # (responder, recusar, id do timeout) do RequestPasskey
         self.ocupado = set()  # MACs com pareamento/conexão em andamento
         self.ultimo_estado = ""
         self.tentativas = {}  # MAC -> hora da última reconexão automática
@@ -479,6 +484,31 @@ class Bluetooth:
                     self.tentativas[a["mac"]] = agora
                     self.connect(a["mac"], auto=True)
 
+    def esperando_pin(self, nome, responder, recusar):
+        self.pin_resposta(None)  # um pedido novo derruba o anterior
+        tempo = GLib.timeout_add_seconds(30, lambda: self.pin_resposta(None) and False)
+        self.pin_pendente = (responder, recusar, tempo)
+        self.prompt = {"pede": "pin", "codigo": "", "texto": nome}
+        log(f"agente: esperando o PIN de {nome}")
+        self.salvar()
+
+    def pin_resposta(self, pin):
+        """Responde o RequestPasskey pendente com o número digitado (ou recusa)."""
+        if not self.pin_pendente:
+            return False
+        responder, recusar, tempo = self.pin_pendente
+        self.pin_pendente = None
+        if pin is not None:  # com None pode ser o próprio timeout que já expirou
+            GLib.source_remove(tempo)
+        if pin is not None and pin.isdigit() and len(pin) <= 6:
+            log("agente: PIN digitado na tela")
+            responder(dbus.UInt32(int(pin)))
+        else:
+            recusar(dbus.DBusException("sem PIN", name="org.bluez.Error.Rejected"))
+        self.prompt = None
+        self.salvar()
+        return False
+
     def comando(self, linha):
         partes = linha.split()
         if not partes or self.adapter_path is None:
@@ -498,7 +528,10 @@ class Bluetooth:
                 self.remove(mac)
             elif acao == "som" and mac:
                 self.som(mac)
+            elif acao == "pin":
+                self.pin_resposta(partes[1] if len(partes) > 1 else "")
             elif acao == "cancelar":
+                self.pin_resposta(None)
                 self.prompt, self.msg = None, ""
         except dbus.DBusException as e:
             log(f"{linha}: {e}")

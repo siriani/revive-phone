@@ -14,7 +14,7 @@ use crate::{brilho, camera, clima, i18n, inicio, loja, mesh, sistema};
 use crate::dados;
 use crate::manifesto;
 use crate::musica::{self, Subsonic};
-use crate::{Album, AppInfo, AppLojaUi, FotoUi, AppOrdem, MsgMesh, NoMesh, SecaoSobre, ItemSobre, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
+use crate::{Album, AppInfo, AppLojaUi, FotoUi, AppOrdem, MsgMesh, NoAchado, NoMesh, SecaoSobre, ItemSobre, AppWindow, Aparelho, Bolha, Faixa, FilaItem, HoraClima, HoraPrevUi, DiaUi, LugarUi, IconesClima, Item, MoedaMini, Moeda, Rede, Tecla, Tema, TgConversa, Vela};
 use crate::telegram;
 use std::rc::Rc;
 use crate::cripto;
@@ -596,6 +596,9 @@ fn ir(ui: &AppWindow, tela: &str) {
     }
     if tela == "ajustes" {
         atualizar_ajustes(ui);
+    }
+    if tela == "mesh-conectar" {
+        ui.set_mc_atual(ss(mesh_atual()));
     }
     if tela == "telegram" {
         return abrir_telegram(ui);
@@ -1329,6 +1332,7 @@ fn aplicar_bt(ui: &AppWindow, st: Value) {
     ui.set_bt_mensagem(ss(st["msg"].as_str().unwrap_or("")));
     ui.set_prompt_codigo(ss(st["prompt"]["codigo"].as_str().unwrap_or("")));
     ui.set_prompt_texto(ss(st["prompt"]["texto"].as_str().unwrap_or("")));
+    ui.set_prompt_pede(ss(st["prompt"]["pede"].as_str().unwrap_or("")));
     let lista = st["aparelhos"].to_string();
     if EST.with_borrow(|e| e.bt_ultimo == lista) {
         return; // nada mudou: não refaz a lista (evita redesenho)
@@ -1512,7 +1516,9 @@ fn mesh_teclado(ui: &AppWindow, campo: &str, texto: String) {
         if texto.is_empty() {
             return;
         }
-        let _ = std::fs::write("/etc/revive/mesh.conf", format!("host={texto}\n"));
+        // Wi-Fi direto: guarda o IP e tira o ble= (a ponte BLE fica parada nesse modo)
+        mesh_conf_gravar(&[("host", Some(texto.as_str())), ("ble", None), ("pin", None)]);
+        servico("revive-mesh-ble", "stop");
         match MESH_TX.with_borrow(|t| t.clone()) {
             Some(tx) => {
                 let _ = tx.send(mesh::Cmd::Conectar);
@@ -2081,7 +2087,18 @@ pub fn ligar(ui: &AppWindow) {
     let f = ui.as_weak();
     ui.on_mesh_digitar(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Mesh("mensagem".into()))));
     let f = ui.as_weak();
-    ui.on_mesh_configurar(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Mesh("host".into()))));
+    ui.on_mesh_configurar(move || f.upgrade().iter().for_each(|ui| ir(ui, "mesh-conectar")));
+    let f = ui.as_weak();
+    ui.on_mc_wifi(move || f.upgrade().iter().for_each(|ui| abrir_teclado(ui, Modo::Mesh("host".into()))));
+    let f = ui.as_weak();
+    ui.on_mc_procurar(move || f.upgrade().iter().for_each(mesh_procurar));
+    let f = ui.as_weak();
+    ui.on_mc_escolher(move |mac, nome| f.upgrade().iter().for_each(|ui| mesh_escolher(ui, &mac, &nome)));
+    let f = ui.as_weak();
+    ui.on_mc_esquecer(move || f.upgrade().iter().for_each(mesh_esquecer));
+    ui.on_pin_enviar(|p| {
+        dados::bt_cmd(&format!("pin {p}"));
+    });
     let f = ui.as_weak();
     ui.on_mesh_enviar(move || {
         let Some(ui) = f.upgrade() else { return };
@@ -2587,4 +2604,143 @@ fn atualizar_ajustes(ui: &AppWindow) {
         Some((usado, total)) => i18n::tf("{} usados de {}", &[&tamanho(usado), &tamanho(total)]),
         None => String::new(),
     }));
+}
+
+// ------------------------------------------------- Meshtastic: conectar a um nó
+
+const MESH_CONF: &str = "/etc/revive/mesh.conf";
+/// serviço GATT do Meshtastic (anunciado pelos nós)
+const MESH_UUID: &str = "6ba1b218-15a8-461f-9fa8-5dcae273eafd";
+
+fn mesh_conf_ler() -> Vec<(String, String)> {
+    std::fs::read_to_string(MESH_CONF)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            Some((k.trim().to_lowercase(), v.split('#').next()?.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Muda só as chaves pedidas (None = remove); grava atômico e com 600 (tem PIN).
+fn mesh_conf_gravar(mudar: &[(&str, Option<&str>)]) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut conf = mesh_conf_ler();
+    for (k, v) in mudar {
+        conf.retain(|(c, _)| c != k);
+        if let Some(v) = v {
+            conf.push((k.to_string(), v.to_string()));
+        }
+    }
+    let texto: String = conf.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+    let tmp = format!("{MESH_CONF}.novo");
+    let _ = std::fs::create_dir_all("/etc/revive");
+    let ok = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, texto.as_bytes()));
+    if ok.is_ok() {
+        let _ = std::fs::rename(&tmp, MESH_CONF);
+    }
+}
+
+fn servico(nome: &str, acao: &str) {
+    let _ = std::process::Command::new("rc-service").args([nome, acao]).spawn();
+}
+
+/// Texto "Bluetooth · nome" / "Wi-Fi · IP" da conexão configurada.
+fn mesh_atual() -> String {
+    let conf = mesh_conf_ler();
+    let v = |k: &str| conf.iter().find(|(c, _)| c == k).map(|(_, v)| v.clone()).unwrap_or_default();
+    let (ble, host) = (v("ble"), v("host"));
+    if !ble.is_empty() {
+        let nome = std::process::Command::new("bluetoothctl")
+            .args(["info", &ble])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .find_map(|l| l.trim().strip_prefix("Name: ").map(str::to_string))
+            })
+            .unwrap_or(ble);
+        format!("Bluetooth · {nome}")
+    } else if !host.is_empty() && host != "127.0.0.1" {
+        format!("Wi-Fi · {host}")
+    } else {
+        String::new()
+    }
+}
+
+/// Busca por 12 s os nós que anunciam o serviço do Meshtastic.
+fn mesh_procurar(ui: &AppWindow) {
+    ui.set_mc_procurando(true);
+    ui.set_mc_achados(ModelRc::new(VecModel::from(Vec::<NoAchado>::new())));
+    let fraca = ui.as_weak();
+    std::thread::spawn(move || {
+        let bt = |a: &[&str]| {
+            std::process::Command::new("bluetoothctl")
+                .args(a)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default()
+        };
+        bt(&["--timeout", "12", "scan", "le"]);
+        let mut achados = vec![];
+        for linha in bt(&["devices"]).lines() {
+            let mut p = linha.split_whitespace();
+            let (Some("Device"), Some(mac)) = (p.next(), p.next()) else { continue };
+            let info = bt(&["info", mac]);
+            if !info.to_lowercase().contains(MESH_UUID) {
+                continue;
+            }
+            let campo = |k: &str| info.lines().find_map(|l| l.trim().strip_prefix(k).map(|v| v.trim().to_string()));
+            let nome = campo("Name:").unwrap_or_else(|| mac.to_string());
+            // "RSSI: 0xffffffbd (-67)"
+            let sinal = campo("RSSI:")
+                .and_then(|r| r.rsplit_once('(').map(|(_, v)| v.trim_end_matches(')').to_string()))
+                .map(|r| format!("{r} dBm"))
+                .unwrap_or_default();
+            achados.push((sinal.clone(), NoAchado { nome: ss(nome), mac: ss(mac.to_string()), sinal: ss(sinal) }));
+        }
+        // sinal mais forte primeiro (valores negativos: -50 > -80)
+        achados.sort_by_key(|(s, _)| -s.split_whitespace().next().and_then(|n| n.parse::<i32>().ok()).unwrap_or(-200));
+        let lista: Vec<NoAchado> = achados.into_iter().map(|(_, n)| n).collect();
+        let _ = fraca.upgrade_in_event_loop(move |ui| {
+            ui.set_mc_procurando(false);
+            ui.set_mc_procurou(true);
+            ui.set_mc_achados(ModelRc::new(VecModel::from(lista)));
+        });
+    });
+}
+
+/// Escolhe o nó: ble=MAC, sem pin= (PIN aleatório, pedido na tela), ponte reiniciada.
+fn mesh_escolher(ui: &AppWindow, mac: &str, nome: &str) {
+    mesh_conf_gravar(&[("ble", Some(mac)), ("host", Some("127.0.0.1")), ("pin", None)]);
+    let mac = mac.to_string();
+    std::thread::spawn(move || {
+        // um pareamento antigo (ou falho) com o mesmo nó atrapalha o novo
+        let _ = std::process::Command::new("bluetoothctl").args(["remove", &mac]).output();
+        let _ = std::process::Command::new("rc-service").args(["revive-mesh-ble", "restart"]).output();
+    });
+    ui.set_mc_atual(ss(format!("Bluetooth · {nome}")));
+    ir(ui, "mesh");
+    ui.set_aviso(ss(i18n::t("Conectando ao nó: quando pedir, digite o PIN que aparece na tela dele")));
+    if let Some(tx) = MESH_TX.with_borrow(|t| t.clone()) {
+        let _ = tx.send(mesh::Cmd::Conectar);
+    }
+}
+
+fn mesh_esquecer(ui: &AppWindow) {
+    let conf = mesh_conf_ler();
+    if let Some((_, mac)) = conf.iter().find(|(k, _)| k == "ble") {
+        let _ = std::process::Command::new("bluetoothctl").args(["remove", mac]).spawn();
+    }
+    mesh_conf_gravar(&[("ble", None), ("pin", None), ("host", None)]);
+    servico("revive-mesh-ble", "stop");
+    ui.set_mc_atual(ss(""));
 }

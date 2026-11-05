@@ -13,6 +13,7 @@ Logs curtos em stdout (o OpenRC manda para /var/log/revive-mesh-ble.log).
 import asyncio
 import os
 import struct
+import subprocess
 import sys
 import time
 
@@ -156,6 +157,9 @@ class Ponte:
         self.trava_ble = asyncio.Lock()
         self.parar = asyncio.Event()
         self.tarefas = set()
+        # pacotes do app que chegaram com o BLE fora (ex.: want_config logo ao abrir):
+        # vão para o nó assim que ele conectar, senão o app esperaria para sempre
+        self.pendentes = []
 
     # ---------------------------------------------------------- TCP
     async def para_cliente(self, payload):
@@ -172,7 +176,8 @@ class Ponte:
     async def para_radio(self, payload):
         cliente = self.ble
         if cliente is None or not cliente.is_connected:
-            log("sem BLE: pacote do app descartado")
+            self.pendentes = (self.pendentes + [payload])[-10:]
+            log("sem BLE: pacote do app guardado para quando o nó conectar")
             return
         parar = self.parar
         passo = max(1, self.mtu - 3)
@@ -183,6 +188,10 @@ class Ponte:
         except Exception as e:
             log(f"ToRadio: {e}")
             parar.set()
+            return
+        # como o cliente BLE oficial (meshtastic-python): depois de escrever, lê o
+        # FromRadio até esvaziar — não depende do aviso do FromNum chegar
+        await self.drenar()
 
     async def tcp_cliente(self, leitor, escritor):
         async with self.trava_tcp:
@@ -257,6 +266,18 @@ class Ponte:
             log("BLE caiu")
             parar.set()
 
+        # pareado e confiável, o BlueZ pode manter a ligação aberta depois que esta ponte
+        # caiu; o nó então para de se anunciar e a busca do bleak não o acha
+        try:
+            info = subprocess.run(["bluetoothctl", "info", self.mac], capture_output=True,
+                                  text=True, timeout=5).stdout
+            if "Connected: yes" in info:
+                log("ligação antiga ainda aberta no BlueZ: desconectando")
+                subprocess.run(["bluetoothctl", "disconnect", self.mac], capture_output=True, timeout=10)
+                await asyncio.sleep(2)
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"bluetoothctl: {e}")
+
         cliente = BleakClient(self.mac, disconnected_callback=caiu)
         try:
             try:
@@ -291,10 +312,13 @@ class Ponte:
 
             await self.drenar()  # drena uma vez depois de conectar
             log(f"conectado ao nó {self.mac}")
+            pendentes, self.pendentes = self.pendentes, []
+            for payload in pendentes:
+                await self.para_radio(payload)
 
-            if notifica:
-                await parar.wait()
-            else:
+            # com ou sem aviso do FromNum, lê a cada 2 s: o aviso às vezes não chega
+            # (CCCD sem efeito depois do pareamento) e aí nada passaria para o app
+            if True:
                 while not parar.is_set():
                     try:
                         await asyncio.wait_for(parar.wait(), 2)
@@ -327,6 +351,11 @@ class Ponte:
 
 async def main():
     mac, pin, linhas = ler_conf()
+    if not mac and os.environ.get("REVIVE_MESH_PROCURAR") != "1":
+        # o nó é escolhido na tela (Meshtastic > engrenagem > Procurar): pegar o primeiro
+        # que aparecer poderia conectar no nó do vizinho
+        log("sem ble= no mesh.conf: escolha um nó no app Meshtastic; tento de novo em 30 s")
+        return 0
     if not mac:
         try:
             mac = await procurar()

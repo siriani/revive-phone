@@ -4,7 +4,7 @@
 // Fontes só 18/21/24/26/34px. Os textos dinâmicos usam os caracteres dos Texts
 // invisíveis no fim da tela (só caracteres literais entram na fonte embutida).
 
-import { AppBar } from "@material";
+import { AppBar, FilledButton, OutlineButton, CircularProgressIndicator } from "@material";
 import { Tema } from "tema.slint";
 
 export struct NoMesh {
@@ -15,6 +15,13 @@ export struct NoMesh {
     snr: string,
     visto: string,
     online: bool,
+}
+
+// nó achado na busca por Bluetooth (serviço GATT do Meshtastic)
+export struct NoAchado {
+    nome: string,
+    mac: string,
+    sinal: string,
 }
 
 export struct MsgMesh {
@@ -305,12 +312,24 @@ export component TelaMesh inherits Rectangle {
                 spacing: 10px;
                 padding-top: 8px;
                 padding-bottom: 8px;
+                // sem isto uma mensagem só esticava até a altura toda da área
+                alignment: start;
 
                 for m[i] in root.mensagens : HorizontalLayout {
                     alignment: m.minha ? end : start;
 
                     Rectangle {
-                        max-width: 640px;
+                        // texto que quebra linha tem largura mínima ~0: sem isto o layout
+                        // espremia a bolha (curta e altíssima); mede o texto sem quebra
+                        property <length> largura: min(640px, max(max(med-texto.preferred-width,
+                                              med-autor.preferred-width), med-hora.preferred-width) + 28px);
+                        min-width: self.largura;
+                        max-width: self.largura;
+                        horizontal-stretch: 0;
+                        med-texto := Text { visible: false; text: m.texto; font-size: 26px; wrap: no-wrap; }
+                        med-autor := Text { visible: false; text: m.autor; font-size: 21px;
+                                            font-family: "DejaVu Sans Bold"; wrap: no-wrap; }
+                        med-hora := Text { visible: false; text: m.hora; font-size: 18px; wrap: no-wrap; }
                         border-radius: 22px;
                         background: m.minha ? Tema.destaque-suave : Tema.superficie;
                         clip: true;
@@ -458,4 +477,85 @@ export component TelaMesh inherits Rectangle {
     Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 21px; }
     Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 21px; font-family: "DejaVu Sans Bold"; }
     Text { visible: false; text: "0123456789·°%:/-+.,()#?…—hmskmABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç!"; font-size: 18px; }
+}
+
+// Conectar a um nó: busca por Bluetooth (lista os nós que anunciam o serviço do
+// Meshtastic), ou IP pelo Wi-Fi. O PIN é pedido depois, por cima de tudo, quando o nó
+// mostrar o número na tela dele (PIN aleatório) — ver PromptPin em app.slint.
+export component TelaMeshConectar inherits Rectangle {
+    in property <string> atual;          // "Bluetooth · Meshtastic_83ec", "Wi-Fi · 10.0.0.5" ou ""
+    in property <bool> procurando;
+    in property <bool> procurou;
+    in property <[NoAchado]> achados;
+    callback voltar();
+    callback procurar();
+    callback escolher(string, string);   // mac, nome
+    callback wifi();
+    callback esquecer();
+    background: Tema.fundo;
+    AppBar {
+        x: 0; y: 0; width: parent.width;
+        title: @tr("Conectar a um nó");
+        leading_button: { icon: @image-url("icones/arrow_back.svg"), enabled: true };
+        leading_button_clicked => { root.voltar(); }
+    }
+    // coluna da esquerda: conexão atual e alternativas
+    Rectangle {
+        x: 24px; y: 116px; width: 420px; height: 580px;
+        border-radius: Tema.raio-m; background: Tema.superficie;
+        Text { x: 28px; y: 28px; text: @tr("Conectado a"); font-size: 21px; color: Tema.texto-sec; }
+        Text { x: 28px; y: 60px; width: parent.width - 56px;
+               text: root.atual == "" ? @tr("nenhum nó") : root.atual;
+               font-size: Tema.texto-corpo; font-family: "DejaVu Sans Bold"; color: Tema.texto; overflow: elide; }
+        Text {
+            x: 28px; y: 124px; width: parent.width - 56px;
+            text: @tr("Ligue o nó perto do aparelho e toque em Procurar. Ao escolher, o nó mostra um PIN de 6 dígitos na tela dele: digite esse número aqui.");
+            font-size: 21px; color: Tema.texto-sec; wrap: word-wrap;
+        }
+        OutlineButton {
+            x: 28px; y: 380px; width: parent.width - 56px; height: 72px;
+            text: @tr("Usar Wi-Fi (IP do nó)");
+            clicked => { root.wifi(); }
+        }
+        if root.atual != "": OutlineButton {
+            x: 28px; y: 476px; width: parent.width - 56px; height: 72px;
+            text: @tr("Esquecer este nó");
+            clicked => { root.esquecer(); }
+        }
+    }
+    // coluna da direita: busca
+    Rectangle {
+        x: 468px; y: 116px; width: 788px; height: 580px;
+        border-radius: Tema.raio-m; background: Tema.superficie; clip: true;
+        Text { x: 28px; y: 28px; text: @tr("Nós por perto (Bluetooth)"); font-size: Tema.texto-corpo;
+               font-family: "DejaVu Sans Bold"; color: Tema.texto; }
+        FilledButton {
+            x: parent.width - 268px; y: 16px; width: 240px; height: 64px;
+            text: root.procurando ? @tr("Procurando…") : @tr("Procurar");
+            enabled: !root.procurando;
+            clicked => { root.procurar(); }
+        }
+        if root.procurando: CircularProgressIndicator {
+            x: (parent.width - 96px) / 2; y: 250px; width: 96px; height: 96px; indeterminate: true;
+        }
+        if !root.procurando && root.achados.length == 0: Text {
+            x: 28px; y: 250px; width: parent.width - 56px; horizontal-alignment: center;
+            text: root.procurou ? @tr("Nenhum nó encontrado. Confira se ele está ligado e sem outro celular conectado.")
+                                : @tr("Toque em Procurar para buscar por 12 segundos.");
+            font-size: 21px; color: Tema.texto-sec; wrap: word-wrap;
+        }
+        for n[i] in root.achados: Rectangle {
+            x: 16px; y: 100px + i * 100px; width: parent.width - 32px; height: 88px;
+            border-radius: Tema.raio-p;
+            background: t.pressed ? Tema.superficie-alta : Tema.superficie-baixa;
+            Image { x: 20px; y: 24px; width: 40px; height: 40px; source: @image-url("icones/hub.svg");
+                    colorize: Tema.destaque; }
+            Text { x: 80px; y: 12px; width: parent.width - 280px; text: n.nome; font-size: Tema.texto-corpo;
+                   font-family: "DejaVu Sans Bold"; color: Tema.texto; overflow: elide; }
+            Text { x: 80px; y: 50px; width: parent.width - 280px; text: n.mac; font-size: 21px; color: Tema.texto-sec; }
+            Text { x: parent.width - 190px; width: 170px; height: parent.height; vertical-alignment: center;
+                   horizontal-alignment: right; text: n.sinal; font-size: 21px; color: Tema.texto-sec; }
+            t := TouchArea { clicked => { root.escolher(n.mac, n.nome); } }
+        }
+    }
 }

@@ -6,7 +6,7 @@ export { FilaItem, Album } from "musica_ui.slint";
 export { HoraClima, MoedaMini } from "painel_ui.slint";
 export { HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 export { AppLojaUi } from "loja_ui.slint";
-export { NoMesh, MsgMesh } from "mesh_ui.slint";
+export { NoMesh, NoAchado, MsgMesh } from "mesh_ui.slint";
 export { SecaoSobre, ItemSobre } from "sobre_ui.slint";
 export { FotoUi } from "camera_ui.slint";
 export { AppOrdem } from "inicio_ui.slint";
@@ -32,13 +32,13 @@ import { PainelMat, HoraClima, MoedaMini } from "painel_ui.slint";
 import { TelaClima, TelaCidade, HoraPrevUi, DiaUi, LugarUi } from "clima_ui.slint";
 import { TelaLoja, TelaAppLoja, AppLojaUi } from "loja_ui.slint";
 import { TelaAjustes } from "ajustes_ui.slint";
-import { TelaMesh, NoMesh, MsgMesh } from "mesh_ui.slint";
+import { TelaMesh, TelaMeshConectar, NoMesh, NoAchado, MsgMesh } from "mesh_ui.slint";
 import { TelaSobre, SecaoSobre, ItemSobre } from "sobre_ui.slint";
 import { TelaCamera, TelaGaleria, FotoUi } from "camera_ui.slint";
 import { TelaOrganizar, BotaoEditarInicio, AppOrdem } from "inicio_ui.slint";
 import { Palette } from "std-widgets.slint";
 import { AppBar, Badge, FilledButton, FilledCard, IconButton, ListView, MaterialText,
-         MaterialTypography, MaterialPalette, MenuItem, Slider } from "@material";
+         MaterialTypography, MaterialPalette, MenuItem, Slider, TextButton } from "@material";
 
 // Revive: telas da interface (Slint). Paisagem 1280x720, desenhada pelo
 // renderizador por software direto no framebuffer, só nas áreas que mudam.
@@ -886,6 +886,59 @@ component Prompt inherits Rectangle {
     }
 }
 
+// PIN pedido por um aparelho que MOSTRA o número (nó Meshtastic com PIN aleatório):
+// teclado numérico por cima de qualquer tela; o revive-bt espera a resposta por 30 s.
+component PromptPin inherits Rectangle {
+    in property <string> nome;
+    callback enviar(string);
+    callback cancelar();
+    property <string> pin;
+    background: #000000c0;
+    TouchArea {}
+    Rectangle {
+        x: 300px; y: 30px; width: 680px; height: 660px; border-radius: Tema.raio-g;
+        background: Tema.superficie-alta;
+        Text { x: 40px; y: 28px; width: parent.width - 80px; text: @tr("PIN de pareamento");
+               font-size: Tema.texto-titulo; font-family: "DejaVu Sans Bold"; color: Tema.texto; }
+        Text { x: 40px; y: 80px; width: parent.width - 80px; wrap: word-wrap;
+               text: @tr("Digite o número de 6 dígitos que aparece na tela de") + " " + root.nome;
+               font-size: 21px; color: Tema.texto-sec; }
+        Rectangle {
+            x: 40px; y: 140px; width: parent.width - 80px; height: 80px; border-radius: Tema.raio-m;
+            background: Tema.superficie;
+            Text { width: parent.width; height: parent.height; horizontal-alignment: center;
+                   vertical-alignment: center; text: root.pin == "" ? "······" : root.pin;
+                   font-size: 54px; font-family: "DejaVu Sans Bold";
+                   color: root.pin == "" ? Tema.texto-sec : Tema.texto; }
+        }
+        property <[string]> teclas: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "OK"];
+        for k[i] in self.teclas: Rectangle {
+            x: 40px + mod(i, 3) * 204px; y: 240px + floor(i / 3) * 84px; width: 192px; height: 74px;
+            border-radius: Tema.raio-m;
+            background: k == "OK" ? (root.pin.character-count == 6 ? Tema.destaque : Tema.superficie)
+                                  : (tk.pressed ? Tema.superficie : Tema.fundo);
+            Text { width: parent.width; height: parent.height; horizontal-alignment: center;
+                   vertical-alignment: center; text: k; font-size: Tema.texto-titulo;
+                   color: k == "OK" && root.pin.character-count == 6 ? Tema.sobre-destaque : Tema.texto; }
+            tk := TouchArea {
+                clicked => {
+                    if k == "C" {
+                        root.pin = "";   // Slint não corta string: C limpa tudo
+                    } else if k == "OK" {
+                        if root.pin.character-count == 6 { root.enviar(root.pin); root.pin = ""; }
+                    } else if root.pin.character-count < 6 {
+                        root.pin += k;
+                    }
+                }
+            }
+        }
+        TextButton {
+            x: parent.width - 240px; y: 590px; width: 200px; height: 56px; text: @tr("Cancelar");
+            clicked => { root.pin = ""; root.cancelar(); }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     width: 1280px;
     height: 720px;
@@ -1024,6 +1077,18 @@ export component AppWindow inherits Window {
     in property <string> bt-mensagem;
     in property <string> prompt-codigo;
     in property <string> prompt-texto;
+    // "pin" = o outro aparelho mostra um PIN e o Revive precisa digitá-lo
+    in property <string> prompt-pede;
+    callback pin-enviar(string);
+    // Meshtastic: conectar a um nó
+    in property <string> mc-atual;
+    in property <bool> mc-procurando;
+    in property <bool> mc-procurou;
+    in property <[NoAchado]> mc-achados;
+    callback mc-procurar();
+    callback mc-escolher(string, string);
+    callback mc-wifi();
+    callback mc-esquecer();
     // música
     in property <bool> musica-configurada;
     in property <string> lista-titulo;
@@ -1422,6 +1487,21 @@ export component AppWindow inherits Window {
         border-radius: 32px; background: Tema.superficie-alta; border-width: 1px; border-color: Tema.contorno;
         txt-aviso := Text { text: root.aviso; font-size: 26px; color: Tema.texto; overflow: elide;
                             width: parent.width - 48px; horizontal-alignment: center; }
+    }
+    if root.tela == "mesh-conectar": TelaMeshConectar {
+        width: 1280px; height: 720px;
+        atual: root.mc-atual; procurando: root.mc-procurando; procurou: root.mc-procurou;
+        achados: root.mc-achados;
+        voltar => { root.ir("mesh"); }
+        procurar => { root.mc-procurar(); }
+        escolher(m, n) => { root.mc-escolher(m, n); }
+        wifi => { root.mc-wifi(); }
+        esquecer => { root.mc-esquecer(); }
+    }
+    if root.prompt-pede == "pin": PromptPin {
+        width: 1280px; height: 720px; nome: root.prompt-texto;
+        enviar(p) => { root.pin-enviar(p); }
+        cancelar => { root.bt-acao("cancelar", ""); }
     }
     if root.prompt-codigo != "": Prompt {
         width: 1280px; height: 720px; codigo: root.prompt-codigo; texto: root.prompt-texto;

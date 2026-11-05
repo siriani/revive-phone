@@ -307,7 +307,9 @@ fn sessao(
                         *espera = 5;
                     }
                 }
-                Err(e) => return Fim::Falha(format!("protobuf: {e}")),
+                // um pacote que não decodifica (campo novo do firmware, por exemplo) não
+                // derruba a conexão: é ignorado e registrado
+                Err(e) => eprintln!("mesh: FromRadio ignorado ({} bytes): {e}", bytes.len()),
             }
         }
 
@@ -632,24 +634,27 @@ struct FromRadio {
 // Só os campos usados: o resto é ignorado pelo prost ao decodificar.
 #[derive(Clone, PartialEq, prost::Message)]
 struct MeshPacket {
-    #[prost(uint32, tag = "1")]
+    // números e tipos como no mesh.proto oficial (meshtastic/protobufs): nós são fixed32
+    #[prost(fixed32, tag = "1")]
     from: u32,
-    #[prost(uint32, tag = "2")]
+    #[prost(fixed32, tag = "2")]
     to: u32,
     #[prost(uint32, tag = "3")]
     channel: u32,
     #[prost(message, optional, tag = "4")]
     decoded: Option<Data>,
     #[prost(fixed32, tag = "6")]
-    rx_time: u32,
-    #[prost(float, tag = "7")]
-    rx_snr: f32,
-    #[prost(uint32, tag = "8")]
-    hop_limit: u32,
-    #[prost(bool, tag = "9")]
-    want_ack: bool,
-    #[prost(uint32, tag = "12")]
     id: u32,
+    #[prost(fixed32, tag = "7")]
+    rx_time: u32,
+    #[prost(float, tag = "8")]
+    rx_snr: f32,
+    #[prost(uint32, tag = "9")]
+    hop_limit: u32,
+    #[prost(bool, tag = "10")]
+    want_ack: bool,
+    #[prost(int32, tag = "12")]
+    rx_rssi: i32,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -700,7 +705,8 @@ struct Position {
     longitude_i: i32,
     #[prost(int32, tag = "3")]
     altitude: i32,
-    #[prost(uint32, tag = "4")]
+    // fixed32 no mesh.proto (com uint32 o prost recusa o pacote inteiro)
+    #[prost(fixed32, tag = "4")]
     time: u32,
 }
 
@@ -712,7 +718,8 @@ struct DeviceMetrics {
 
 #[derive(Clone, PartialEq, prost::Message)]
 struct Telemetry {
-    #[prost(uint32, tag = "1")]
+    // fixed32 no telemetry.proto
+    #[prost(fixed32, tag = "1")]
     time: u32,
     #[prost(message, optional, tag = "2")]
     device_metrics: Option<DeviceMetrics>,
@@ -778,6 +785,9 @@ mod testes {
         }
         .encode_to_vec();
 
+        // ToRadio.packet = campo 1 (tamanho); dentro dele "to" (campo 2) é fixed32: 0x15 + 4 bytes
+        assert_eq!(bytes[0], 0x0a);
+        assert!(bytes.windows(5).any(|w| w == [0x15, 0xff, 0xff, 0xff, 0xff]), "to deve ser fixed32");
         let volta = ToRadio::decode(bytes.as_slice()).unwrap();
         let p = volta.packet.unwrap();
         assert_eq!(p.to, BROADCAST);
