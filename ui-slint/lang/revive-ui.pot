@@ -1018,3 +1018,45 @@ msgstr ""
 
 msgid "{} usados de {}"
 msgstr ""
+
+msgid "Conectado a"
+msgstr ""
+
+msgid "Conectando ao nó: quando pedir, digite o PIN que aparece na tela dele"
+msgstr ""
+
+msgid "Conectar a um nó"
+msgstr ""
+
+msgid "Digite o número de 6 dígitos que aparece na tela de"
+msgstr ""
+
+msgid "Esquecer este nó"
+msgstr ""
+
+msgid "Ligue o nó perto do aparelho e toque em Procurar. Ao escolher, o nó mostra um PIN de 6 dígitos na tela dele: digite esse número aqui."
+msgstr ""
+
+msgid "Nenhum nó encontrado. Confira se ele está ligado e sem outro celular conectado."
+msgstr ""
+
+msgid "Nós por perto (Bluetooth)"
+msgstr ""
+
+msgid "PIN de pareamento"
+msgstr ""
+
+msgid "Procurando…"
+msgstr ""
+
+msgid "Procurar"
+msgstr ""
+
+msgid "Toque em Procurar para buscar por 12 segundos."
+msgstr ""
+
+msgid "Usar Wi-Fi (IP do nó)"
+msgstr ""
+
+msgid "nenhum nó"
+msgstr ""

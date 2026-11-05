@@ -1027,3 +1027,45 @@ msgstr "{} d {} h"
 
 msgid "{} usados de {}"
 msgstr "{} used of {}"
+
+msgid "Conectado a"
+msgstr "Connected to"
+
+msgid "Conectando ao nó: quando pedir, digite o PIN que aparece na tela dele"
+msgstr "Connecting to the node: when prompted, type the PIN shown on its screen"
+
+msgid "Conectar a um nó"
+msgstr "Connect to a node"
+
+msgid "Digite o número de 6 dígitos que aparece na tela de"
+msgstr "Type the 6-digit number shown on the screen of"
+
+msgid "Esquecer este nó"
+msgstr "Forget this node"
+
+msgid "Ligue o nó perto do aparelho e toque em Procurar. Ao escolher, o nó mostra um PIN de 6 dígitos na tela dele: digite esse número aqui."
+msgstr "Turn on the node near the device and tap Search. When you choose it, the node shows a 6-digit PIN on its screen: type that number here."
+
+msgid "Nenhum nó encontrado. Confira se ele está ligado e sem outro celular conectado."
+msgstr "No node found. Check that it is on and that no other phone is connected to it."
+
+msgid "Nós por perto (Bluetooth)"
+msgstr "Nodes nearby (Bluetooth)"
+
+msgid "PIN de pareamento"
+msgstr "Pairing PIN"
+
+msgid "Procurando…"
+msgstr "Searching…"
+
+msgid "Procurar"
+msgstr "Search"
+
+msgid "Toque em Procurar para buscar por 12 segundos."
+msgstr "Tap Search to look for 12 seconds."
+
+msgid "Usar Wi-Fi (IP do nó)"
+msgstr "Use Wi-Fi (node IP)"
+
+msgid "nenhum nó"
+msgstr "no node"
